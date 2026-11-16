@@ -13,8 +13,8 @@ const html = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Street Slugger</title>
 <style>
-  :root { --ink: #27305e; --paper: #fffaf0; --sun: #ffd23c; }
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #6fc3e8; touch-action: none; user-select: none; -webkit-user-select: none; }
+  :root { --ink: #2a4478; --paper: #fffaf0; --sun: #ffd23c; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #7ccdea; touch-action: none; user-select: none; -webkit-user-select: none; }
   body { font-family: "Arial Black", "Hiragino Kaku Gothic ProN", "Noto Sans JP", system-ui, sans-serif; color: var(--paper); }
   canvas { position: fixed; left: 0; top: 0; image-rendering: pixelated; image-rendering: crisp-edges; }
   #ink { pointer-events: none; }
@@ -27,7 +27,7 @@ const html = `<!doctype html>
   #hour:active { transform: translate(2px, 2px); box-shadow: 2px 2px 0 var(--ink); }
   #hint { left: 0; right: 0; bottom: max(28px, env(safe-area-inset-bottom)); text-align: center; font-size: 15px; transition: opacity 0.4s; }
   #fps { left: 16px; bottom: 8px; font-size: 11px; font-family: ui-monospace, monospace; }
-  #wait { position: fixed; inset: 0; display: grid; place-items: center; background: #6fc3e8; z-index: 3; font-size: 18px; }
+  #wait { position: fixed; inset: 0; display: grid; place-items: center; background: #7ccdea; z-index: 3; font-size: 18px; }
 </style>
 </head>
 <body>

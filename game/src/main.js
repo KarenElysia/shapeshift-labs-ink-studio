@@ -8,7 +8,8 @@
     q = new URLSearchParams(location.search);
   const street = makeStreet({ makeBuilder, KIT }),
     { world, ch, balls, fx } = street,
-    R = makeRenderer(view, world),
+    BASE = { eye: [-3.4, 0.6, 0.7], target: [3, 1.7, 0.45] },
+    R = makeRenderer(view, world, { props: street.props, dyn: street.dyn, eye: BASE.eye, target: BASE.target }),
     rnd = (a, b) => a + (b - a) * Math.random();
   let W = 0,
     H = 0,
@@ -37,8 +38,8 @@
     HITZ = 0.55,
     SWING = 0.36,
     FLASH = {
-      day: [0x24336e, 0xf77fb0, 0xfffaf0],
-      dusk: [0x1b1f3f, 0xf08a4a, 0xfff1cf]
+      day: [0xff7a66, 0xd9604f],
+      dusk: [0x4a3486, 0x3a2670]
     },
     WORDS = ['POW!', 'BAM!', 'KAPOW!', 'WHAM!', 'BOOM!'];
   const G = {
@@ -131,7 +132,7 @@
         if (ch.striking() && th.p[0] > HITX - 1.1 && th.p[0] < HITX + 2.2) hit(th);
         else if (u > 1.2) {
           th.mode = 'off';
-          say('miss…', [0.6, 1.9, 0], { size: 0.6, life: 0.6, max: 0.6, col: '#c6d2ea' });
+          say('miss…', [0.6, 1.9, 0], { size: 0.7, life: 0.6, max: 0.6 });
         }
       } else if (th.mode === 'out') {
         th.age += dt;
@@ -186,22 +187,31 @@
         far = Math.hypot(W, H);
       let s = lineSeed;
       const rn = () => ((s = (s * 16807) % 2147483647) & 0xffff) / 0xffff;
-      ctx.fillStyle = G.flash > 0.5 ? '#fffaf0' : 'rgba(255,250,240,' + (0.55 + 0.4 * k) + ')';
-      for (let i = 0; i < 30; i++) {
-        const a = (i / 30) * Math.PI * 2 + rn() * 0.2,
+      for (let i = 0; i < 26; i++) {
+        const a0 = (i / 26) * Math.PI * 2 + rn() * 0.2,
           r0 = H * (0.2 + 0.25 * rn() + 0.25 * (1 - k)),
-          w = 0.008 + 0.022 * rn();
-        ctx.beginPath();
-        ctx.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0);
-        ctx.lineTo(cx + Math.cos(a - w) * far, cy + Math.sin(a - w) * far);
-        ctx.lineTo(cx + Math.cos(a + w) * far, cy + Math.sin(a + w) * far);
-        ctx.fill();
+          wide = 0.012 + 0.03 * rn(),
+          hairs = 3 + Math.floor(rn() * 4);
+        ctx.fillStyle = i % 3 === 2 ? '#2a4478' : '#fffaf0';
+        ctx.globalAlpha = 0.6 + 0.4 * k;
+        // each line is a few hairs of a dry brush, starting and stopping where they like
+        for (let j = 0; j < hairs; j++) {
+          const a = a0 + (j / hairs - 0.5) * wide * 2,
+            w = (wide / hairs) * (0.5 + rn()),
+            r1 = r0 * (1 + 0.5 * rn());
+          ctx.beginPath();
+          ctx.moveTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1);
+          ctx.lineTo(cx + Math.cos(a - w) * far, cy + Math.sin(a - w) * far);
+          ctx.lineTo(cx + Math.cos(a + w) * far, cy + Math.sin(a + w) * far);
+          ctx.fill();
+        }
       }
+      ctx.globalAlpha = 1;
     }
     for (const wd of G.words) {
       const u = 1 - wd.life / wd.max,
         pop = u < 0.12 ? 0.6 + (u / 0.12) * 0.6 : 1.2 - Math.min(1, (u - 0.12) * 4) * 0.2,
-        px = Math.round(H * 0.075 * wd.size * pop);
+        px = Math.round(H * 0.052 * wd.size * pop);
       ctx.save();
       ctx.translate(Math.round(wd.x), Math.round(wd.y - u * H * 0.03));
       ctx.rotate(wd.rot);
@@ -211,9 +221,9 @@
       ctx.globalAlpha = u > 0.8 ? (1 - u) / 0.2 : 1;
       ctx.lineJoin = 'round';
       ctx.lineWidth = Math.max(2, px * 0.28);
-      ctx.strokeStyle = '#27305e';
+      ctx.strokeStyle = '#fffaf0';
       ctx.strokeText(wd.str, 0, 0);
-      ctx.fillStyle = wd.col || (G.hour === 'day' ? '#ffd23c' : '#fff1cf');
+      ctx.fillStyle = wd.col || '#2a4478';
       ctx.fillText(wd.str, 0, 0);
       ctx.restore();
     }
@@ -297,6 +307,7 @@
     frame++;
     step(dt);
     R.upload(street.dyn, world.count - street.dyn);
+    R.sort();
     draw();
     fpsN++;
     if (now - fpsT > 1000) {
@@ -314,6 +325,7 @@
       step(1 / 60);
     }
     R.upload(street.dyn, world.count - street.dyn);
+    R.sort();
     draw();
   };
   if (q.get('still')) {

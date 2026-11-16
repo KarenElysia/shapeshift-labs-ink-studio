@@ -1,22 +1,23 @@
-/* Draws a world's splats with WebGL2, at the size of the art pixels, in real time.
-   Each splat is one instanced quad: its covariance is carried to the screen as an ellipse (as cli/render.js does), a solid one is cut
-   hard at half strength, and its depth is worked out for each pixel (where the ray through that pixel passes nearest the middle of the
-   splat), so that large flat dabs cross each other and what stands on them correctly. Nothing is sorted. A second pass over the small
-   picture draws an edge where it steps back, adds ordered noise, takes the nearest palette colour and shows that colour's counterpart
-   in the palette of the hour.
-     const r = makeRenderer(canvas, world)
+/* Paints a world's splats with WebGL2, at the size of the art pixels, in real time, as brush strokes laid one over another.
+   Each splat is one instanced quad carried to the screen as an ellipse (as cli/render.js does it), but what is drawn in it is a dab of
+   a brush: a soft edge, bristles that run dry at different lengths, gaps where the paint gave out. Strokes are blended, so they must go
+   down from far to near: the scenery is drawn in the order it was made (the scene makes it far to near), and everything from
+   `props` on is sorted each frame. A second picture records which pixels belong to what moves, and how far off they are; the last pass
+   draws a dark line round those, and at the moment of a hit replaces the town with flat colour and dots.
+     const r = makeRenderer(canvas, world, { props, dyn, eye, target })
      r.resize(w, h)                       the size of the picture in art pixels
      r.upload(first, count)               send rows of world.data again (what moved)
+     r.sort()                             put what is sorted in order again (after upload)
      r.draw({ eye, target, fov, time, pal, flash, flashCols, shake })
      r.project(p)                         a point of the world on the picture: [x, y, depth] in art pixels (y down) */
-function makeRenderer(canvas, world) {
+function makeRenderer(canvas, world, lay) {
   const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: false, powerPreference: 'high-performance' });
   if (!gl) throw new Error('WebGL2 is needed');
   const sh = (type, src) => {
     const s = gl.createShader(type);
     gl.shaderSource(s, src);
     gl.compileShader(s);
-    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) + '\n' + src);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
     return s;
   };
   const program = (vs, fs) => {
@@ -37,23 +38,28 @@ function makeRenderer(canvas, world) {
   const splat = program(
     `#version 300 es
 precision highp float;
+precision highp int;
 layout(location=0) in vec2 a_corner;
-layout(location=1) in vec4 a_p;     // x y z density
-layout(location=2) in vec4 a_c0;    // c00 c01 c02 packed colour
-layout(location=3) in vec4 a_c1;    // c11 c12 c22 kind
-layout(location=4) in vec4 a_m;     // phase speed range extra
+layout(location=1) in uint a_idx;
+uniform highp sampler2D u_data;     // four texels a splat: [x y z density] [c00 c01 c02 colour] [c11 c12 c22 kind] [phase speed range extra]
 uniform mat4 u_view;
 uniform vec2 u_size;                // art pixels
-uniform float u_focal, u_near, u_far, u_time;
+uniform float u_focal, u_near, u_time;
 uniform vec3 u_fog;                 // start, end, most
-uniform vec3 u_fogCol;
-out vec2 v_q;
-flat out vec3 v_col;
-flat out float v_al, v_cut;
+uniform vec3 u_pal[48];
+uniform vec3 u_out[48];
+uniform int u_n, u_fogI;
+uniform uint u_dyn;                 // from here on a splat is of something that moves: it is outlined
+out vec2 v_uv;
+flat out vec4 v_col;
+flat out vec4 v_s;                  // seed, mode (0 brush, 1 soft, 2 dots), outlined, depth
+flat out vec4 v_t;                  // cut squared, how long for its width, large on screen, how ragged
 flat out vec3 v_mu, v_m0, v_m1, v_m2;
-flat out vec2 v_zr;
-flat out float v_small;
+float hash(float n) { return fract(sin(n * 12.9898) * 43758.5453); }
 void main() {
+  int row = int(a_idx >> 8u), at = int(a_idx & 255u) * 4;
+  vec4 a_p = texelFetch(u_data, ivec2(at, row), 0), a_c0 = texelFetch(u_data, ivec2(at + 1, row), 0),
+       a_c1 = texelFetch(u_data, ivec2(at + 2, row), 0), a_m = texelFetch(u_data, ivec2(at + 3, row), 0);
   vec3 p = a_p.xyz; float al = a_p.w;
   float kraw = a_c1.w, kind = mod(kraw, 16.0);
   bool glow = mod(floor(kraw / 32.0), 2.0) >= 1.0;
@@ -71,6 +77,20 @@ void main() {
   }
   vec3 c = (u_view * vec4(p, 1.0)).xyz;
   if (al <= 0.0 || a_p.y < -30.0 || c.z > -u_near) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  // its colour: the nearest of the palette, then that colour at this hour
+  float pk = a_c0.w;
+  vec3 col = vec3(mod(pk, 256.0), mod(floor(pk / 256.0), 256.0), floor(pk / 65536.0)) / 255.0;
+  int best = 0; float bd = 1e9;
+  for (int i = 0; i < 48; i++) {
+    if (i >= u_n) break;
+    vec3 df = col - u_pal[i]; float dq = dot(df, df);
+    if (dq < bd) { bd = dq; best = i; }
+  }
+  col = u_out[best];
+  float seed = hash(float(a_idx) + 0.37), seed2 = hash(float(a_idx) * 1.7 + 5.1);
+  float mode = al < 1.0 ? 1.0 : (kraw == 16.0 && best == 1) ? 2.0 : 0.0;
+  bool dyn = a_idx >= u_dyn;
+
   mat3 S = mat3(a_c0.x, a_c0.y, a_c0.z, a_c0.y, a_c1.x, a_c1.y, a_c0.z, a_c1.y, a_c1.z);
   mat3 V = mat3(u_view);
   mat3 Sv = V * S * transpose(V);
@@ -83,51 +103,79 @@ void main() {
   float mid = 0.5 * (A + C), rad = sqrt(max(0.0, 0.25 * (A - C) * (A - C) + Bq * Bq));
   float l1 = mid + rad, l2 = max(mid - rad, 0.05);
   vec2 d1 = abs(Bq) > 1e-6 ? normalize(vec2(Bq, l1 - A)) : (A >= C ? vec2(1.0, 0.0) : vec2(0.0, 1.0));
+  float big = l1 > 500.0 ? 1.0 : 0.0;
+  if (mode == 0.0 && l1 < 2.4 * l2) {
+    // a round dab becomes a stroke: drawn out one way, a way of its own
+    float an = seed * 6.2832, lm = sqrt(l1 * l2);
+    d1 = vec2(cos(an), sin(an));
+    l1 = lm * (dyn ? 2.0 : 2.9); l2 = lm * (dyn ? 0.8 : 1.0);
+  }
   vec2 d2 = vec2(-d1.y, d1.x);
   float cut = al >= 1.0 ? sqrt(2.0 * log(2.0 * al)) : 2.6;
   vec2 off = (d1 * a_corner.x * sqrt(l1) + d2 * a_corner.y * sqrt(l2)) * cut;
   vec2 mid2 = vec2(c.x, c.y) * iz * u_focal;
   gl_Position = vec4((mid2 + off) / (0.5 * u_size), 0.0, 1.0);
-  v_q = a_corner * cut;
-  float pk = a_c0.w;
-  vec3 col = vec3(mod(pk, 256.0), mod(floor(pk / 256.0), 256.0), floor(pk / 65536.0)) / 255.0;
-  if (!glow) col = mix(col, u_fogCol, smoothstep(u_fog.x, u_fog.y, -c.z) * u_fog.z);
-  v_col = col; v_al = al; v_cut = cut; v_small = l1 < 9.0 ? 1.0 : 0.0;
+  v_uv = a_corner;
+  if (mode != 2.0) col *= 0.93 + 0.14 * seed2;
+  if (!glow) col = mix(col, u_out[u_fogI], smoothstep(u_fog.x, u_fog.y, -c.z) * u_fog.z);
+  v_col = vec4(col, min(al, 1.0));
+  v_s = vec4(seed, mode, dyn && mode == 0.0 && !glow ? 1.0 : 0.0, clamp(-c.z / 12.0, 0.0, 1.0));
+  v_t = vec4(cut * cut, sqrt(l1 / l2), big, dyn ? 0.3 : 1.0);
   mat3 M = inverse(Sv + mat3(1e-7));
   v_mu = c; v_m0 = M[0]; v_m1 = M[1]; v_m2 = M[2];
-  float zs = 2.5 * sqrt(max(Sv[2][2], 1e-8)) + 0.002;
-  v_zr = vec2(-c.z - zs, -c.z + zs);
 }`,
     `#version 300 es
 precision highp float;
-in vec2 v_q;
-flat in vec3 v_col;
-flat in float v_al, v_cut;
+in vec2 v_uv;
+flat in vec4 v_col;
+flat in vec4 v_s;
+flat in vec4 v_t;
 flat in vec3 v_mu, v_m0, v_m1, v_m2;
-flat in vec2 v_zr;
-flat in float v_small;
 uniform vec2 u_size;
-uniform float u_focal, u_near, u_far;
-out vec4 o_col;
-const float BAYER[16] = float[16](0., 8., 2., 10., 12., 4., 14., 6., 3., 11., 1., 9., 15., 7., 13., 5.);
+uniform float u_focal, u_near;
+layout(location=0) out vec4 o_col;
+layout(location=1) out vec4 o_id;
+float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash2(i), hash2(i + vec2(1.0, 0.0)), f.x), mix(hash2(i + vec2(0.0, 1.0)), hash2(i + vec2(1.0, 1.0)), f.x), f.y);
+}
 void main() {
-  // the ray through this pixel, and how near it passes to the middle of the splat (measured in the splat's own spread)
+  // the ray through this pixel: where it passes nearest the middle of the splat
   vec3 d = vec3((gl_FragCoord.xy - 0.5 * u_size) / u_focal, -1.0);
   mat3 M = mat3(v_m0, v_m1, v_m2);
   vec3 Md = M * d;
   float dd = max(dot(Md, d), 1e-9), dm = dot(Md, v_mu);
-  if (dm < u_near * dd) discard;   // (nearest behind the eye: the ray never meets it)
-  float r2 = dot(v_q, v_q);
-  if (v_small < 0.5) { vec3 x = d * (dm / dd) - v_mu; r2 = max(r2, dot(x, M * x)); }
-  if (v_al >= 1.0) { if (r2 > v_cut * v_cut) discard; }
+  if (dm < u_near * dd) discard;
+  float u = v_uv.x, v = v_uv.y, a;
+  vec3 col = v_col.rgb;
+  if (v_s.y == 1.0) a = v_col.a * exp(-0.5 * dot(v_uv, v_uv) * v_t.x);
   else {
-    ivec2 ip = ivec2(gl_FragCoord.xy);
-    float th = (BAYER[(ip.x & 3) + ((ip.y & 3) << 2)] + 0.5) / 16.0;
-    if (v_al * exp(-0.5 * r2) < th) discard;
+    float seed = v_s.x * 91.7, rag = v_t.w;
+    float bn = noise(vec2(v * 4.5 + seed, seed * 1.7));                                 // one value a bristle, the length of the stroke
+    float fine = noise(vec2(v * 12.0 + seed * 3.1, u * 1.1 * v_t.y + seed));
+    float side = 1.0 - smoothstep(0.7, 0.98, abs(v) + (fine - 0.5) * 0.2);
+    float len = 1.0 - rag * (0.06 + 0.4 * bn);                                         // where this bristle runs dry
+    float end = 1.0 - smoothstep(len - 0.14, len + 0.02, abs(u));
+    float dry = smoothstep(0.2, 0.42, fine + (1.0 - abs(u)) * 0.55);
+    a = side * end;
+    if (v_s.y == 2.0) {
+      // a shadow: dots in rows across the picture
+      vec2 g = mat2(0.7071, -0.7071, 0.7071, 0.7071) * gl_FragCoord.xy / 2.6;
+      a *= step(length(fract(g) - 0.5), 0.39);
+    } else {
+      a *= mix(1.0, dry, 0.85 * rag) * 0.97;
+      col *= 0.92 + 0.16 * bn;
+    }
+    if (v_t.z > 0.5) {
+      vec3 x = d * (dm / dd) - v_mu;
+      a *= 1.0 - smoothstep(0.6, 1.2, dot(x, M * x) / v_t.x);
+    }
   }
-  float t = clamp(dm / dd, v_zr.x, v_zr.y);
-  gl_FragDepth = clamp((t - u_near) / (u_far - u_near), 0.0, 0.9999);
-  o_col = vec4(v_col, 1.0);
+  if (a < 0.02) discard;
+  o_col = vec4(col, a);
+  o_id = vec4(v_s.z, v_s.w, 0.0, a);
 }`
   );
 
@@ -139,71 +187,80 @@ void main() { gl_Position = vec4(a_corner, 0.0, 1.0); }`,
     `#version 300 es
 precision highp float;
 uniform sampler2D u_scene;
-uniform highp sampler2D u_depth;
-uniform vec3 u_pal[48];
-uniform vec3 u_out[48];
-uniform int u_n;
-uniform float u_dither, u_flash, u_near, u_far;
-uniform vec3 u_flashA, u_flashB, u_flashC;
+uniform sampler2D u_id;
+uniform float u_flash;
+uniform vec3 u_ink, u_flashA, u_flashB;
 uniform ivec2 u_shake;
 out vec4 o_col;
-const float BAYER[16] = float[16](0., 8., 2., 10., 12., 4., 14., 6., 3., 11., 1., 9., 15., 7., 13., 5.);
-int nearest(vec3 c) {
-  int best = 0; float bd = 1e9;
-  for (int i = 0; i < 48; i++) {
-    if (i >= u_n) break;
-    vec3 df = c - u_pal[i]; float d = dot(df * df, vec3(0.30, 0.55, 0.15));
-    if (d < bd) { bd = d; best = i; }
-  }
-  return best;
-}
-float depthAt(ivec2 p) {
-  p = clamp(p, ivec2(0), textureSize(u_depth, 0) - 1);
-  return u_near + texelFetch(u_depth, p, 0).r * (u_far - u_near);
-}
+vec4 idAt(ivec2 p) { return texelFetch(u_id, clamp(p, ivec2(0), textureSize(u_id, 0) - 1), 0); }
 void main() {
   ivec2 size = textureSize(u_scene, 0);
   ivec2 p = clamp(ivec2(gl_FragCoord.xy) + u_shake, ivec2(0), size - 1);
-  vec3 c = texelFetch(u_scene, p, 0).rgb;
-  float z = depthAt(p);
-  float zn = max(max(depthAt(p + ivec2(1, 0)), depthAt(p - ivec2(1, 0))), max(depthAt(p + ivec2(0, 1)), depthAt(p - ivec2(0, 1))));
-  bool edge = zn - z > 0.22 + 0.07 * z;
-  float noise = ((BAYER[(p.x & 3) + ((p.y & 3) << 2)] + 0.5) / 16.0 - 0.5) * u_dither;
-  int i = nearest(clamp(c + noise, 0.0, 1.0));
-  vec3 col = u_out[i];
-  if (edge) {
-    vec3 tone = col * 0.6;
-    tone = min(vec3(1.0), tone * max(1.0, 0.1 / max(dot(tone, vec3(0.30, 0.55, 0.15)), 0.001)));
-    col = mix(col, tone, 0.75);
+  vec3 col = texelFetch(u_scene, p, 0).rgb;
+  vec4 me = idAt(p), a = idAt(p + ivec2(1, 0)), b = idAt(p - ivec2(1, 0)), c = idAt(p + ivec2(0, 1)), e = idAt(p - ivec2(0, 1));
+  bool mine = me.r > 0.5;
+  float near4 = max(max(a.r, b.r), max(c.r, e.r));
+  // a line round what moves, and inside it wherever one part of it stands in front of another
+  bool line = !mine && near4 > 0.5;
+  if (mine) {
+    float step4 = 0.0;
+    if (a.r > 0.5) step4 = max(step4, a.g - me.g);
+    if (b.r > 0.5) step4 = max(step4, b.g - me.g);
+    if (c.r > 0.5) step4 = max(step4, c.g - me.g);
+    if (e.r > 0.5) step4 = max(step4, e.g - me.g);
+    if (step4 > 0.009) col = mix(col, u_ink, 0.75);
   }
   if (u_flash > 0.0) {
-    // the moment of a hit: three flat colours, the far town gone
-    float l = dot(u_pal[i], vec3(0.30, 0.55, 0.15));
-    vec3 f = z > 14.0 ? u_flashA : (edge || l < 0.34) ? u_flashA : l > 0.62 ? u_flashC : u_flashB;
+    // the moment of a hit: the town gone to one flat colour with dots, what moves in a few loud colours
+    vec3 f;
+    if (mine) {
+      float l = dot(col, vec3(0.30, 0.55, 0.15));
+      f = clamp(mix(vec3(l), col, 1.7), 0.0, 1.0);
+      f = floor(f * 3.0 + 0.5) / 3.0;
+    } else {
+      vec2 g = vec2(p) / 9.0;
+      g.x += 0.5 * floor(mod(g.y, 2.0));
+      f = length(fract(g) - 0.5) < 0.2 ? u_flashB : u_flashA;
+    }
     col = mix(col, f, u_flash);
   }
+  if (line) col = mix(col, u_ink, 0.9);
   o_col = vec4(col, 1.0);
 }`
   );
 
-  // one quad, drawn once for each splat
+  // ------------------------------------------------------------ what is sent to the card
+  const N = world.count,
+    ROW = 256,
+    rows = Math.ceil(N / ROW),
+    padded = new Float32Array(rows * ROW * 16);
+  padded.set(world.data);
+  for (let i = N; i < rows * ROW; i++) padded[i * 16 + 1] = -99;
+  const dataTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, dataTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, ROW * 4, rows, 0, gl.RGBA, gl.FLOAT, padded);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
   const quad = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, quad);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
-  const inst = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, inst);
-  gl.bufferData(gl.ARRAY_BUFFER, world.data, gl.DYNAMIC_DRAW);
+  const order = new Uint32Array(N);
+  for (let i = 0; i < N; i++) order[i] = i;
+  const orderBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, orderBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, order, gl.DYNAMIC_DRAW);
   const vao = gl.createVertexArray();
   gl.bindVertexArray(vao);
   gl.bindBuffer(gl.ARRAY_BUFFER, quad);
   gl.enableVertexAttribArray(0);
   gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-  gl.bindBuffer(gl.ARRAY_BUFFER, inst);
-  for (let i = 0; i < 4; i++) {
-    gl.enableVertexAttribArray(1 + i);
-    gl.vertexAttribPointer(1 + i, 4, gl.FLOAT, false, 64, i * 16);
-    gl.vertexAttribDivisor(1 + i, 1);
-  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, orderBuf);
+  gl.enableVertexAttribArray(1);
+  gl.vertexAttribIPointer(1, 1, gl.UNSIGNED_INT, 0, 0);
+  gl.vertexAttribDivisor(1, 1);
   const pvao = gl.createVertexArray();
   gl.bindVertexArray(pvao);
   gl.bindBuffer(gl.ARRAY_BUFFER, quad);
@@ -211,11 +268,50 @@ void main() {
   gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
   gl.bindVertexArray(null);
 
+  /* far to near, for everything from lay.props on: measured along the way the eye usually looks, so that what stands still keeps its
+     place in the order while the eye sways. A shadow goes down before what stands on it */
+  const P0 = lay.props,
+    NS = N - P0,
+    keys = new Uint32Array(NS),
+    fixed = new Float32Array(NS),
+    ex = lay.eye,
+    fl = Math.hypot(lay.target[0] - ex[0], lay.target[1] - ex[1], lay.target[2] - ex[2]),
+    fw = [(lay.target[0] - ex[0]) / fl, (lay.target[1] - ex[1]) / fl, (lay.target[2] - ex[2]) / fl],
+    D = world.data,
+    shadowCol = ((world.pal[1] >> 16) & 255) + ((world.pal[1] >> 8) & 255) * 256 + (world.pal[1] & 255) * 65536;
+  if (NS > 65535) throw new Error('too many splats to sort');
+  const depthOf = i => {
+    const o = i * 16;
+    return (D[o] - ex[0]) * fw[0] + (D[o + 1] - ex[1]) * fw[1] + (D[o + 2] - ex[2]) * fw[2];
+  };
+  for (let i = P0; i < lay.dyn; i++) fixed[i - P0] = depthOf(i);
+  let drawn = N;
+  function sort() {
+    let n = 0;
+    for (let i = P0; i < N; i++) {
+      const o = i * 16;
+      let z;
+      if (i < lay.dyn) z = fixed[i - P0];
+      else {
+        if (D[o + 1] < -30 || D[o + 3] <= 0) continue;
+        z = depthOf(i);
+        if (D[o + 11] === 16 && D[o + 7] === shadowCol) z += 4;
+      }
+      const q = z <= 0 ? 0 : z >= 160 ? 65535 : (z * 409.59) | 0;
+      keys[n++] = (65535 - q) * 65536 + (i - P0);
+    }
+    keys.subarray(0, n).sort();
+    for (let k = 0; k < n; k++) order[P0 + k] = P0 + (keys[k] & 65535);
+    drawn = P0 + n;
+    gl.bindBuffer(gl.ARRAY_BUFFER, orderBuf);
+    gl.bufferSubData(gl.ARRAY_BUFFER, P0 * 4, order, P0, n);
+  }
+
   let W = 0,
     H = 0,
     fbo = null,
     colTex = null,
-    depTex = null;
+    idTex = null;
   function resize(w, h) {
     if (w === W && h === H) return;
     W = w;
@@ -225,24 +321,25 @@ void main() {
     if (fbo) {
       gl.deleteFramebuffer(fbo);
       gl.deleteTexture(colTex);
-      gl.deleteTexture(depTex);
+      gl.deleteTexture(idTex);
     }
-    const tex = (ifmt, fmt, type) => {
+    const tex = () => {
       const t = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, t);
-      gl.texImage2D(gl.TEXTURE_2D, 0, ifmt, w, h, 0, fmt, type, null);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       return t;
     };
-    colTex = tex(gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
-    depTex = tex(gl.DEPTH_COMPONENT32F, gl.DEPTH_COMPONENT, gl.FLOAT);
+    colTex = tex();
+    idTex = tex();
     fbo = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, colTex, 0);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, depTex, 0);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, idTex, 0);
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
@@ -253,8 +350,8 @@ void main() {
       return a;
     },
     basePal = flat(world.pal),
-    NEAR = 0.25,
-    FAR = 400;
+    flats = new Map(),
+    NEAR = 0.25;
   let view = new Float32Array(16),
     focal = 1;
   function lookAt(e, t) {
@@ -295,10 +392,14 @@ void main() {
   return {
     gl,
     resize,
+    sort,
     size: () => [W, H],
     upload(first, count) {
-      gl.bindBuffer(gl.ARRAY_BUFFER, inst);
-      gl.bufferSubData(gl.ARRAY_BUFFER, first * 64, world.data, first * 16, count * 16);
+      padded.set(world.data.subarray(first * 16, (first + count) * 16), first * 16);
+      const r0 = Math.floor(first / ROW),
+        r1 = Math.floor((first + count - 1) / ROW);
+      gl.bindTexture(gl.TEXTURE_2D, dataTex);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, r0, ROW * 4, r1 - r0 + 1, gl.RGBA, gl.FLOAT, padded, r0 * ROW * 16);
     },
     project(p) {
       const x = view[0] * p[0] + view[4] * p[1] + view[8] * p[2] + view[12],
@@ -311,49 +412,49 @@ void main() {
       focal = H / 2 / Math.tan((o.fov * Math.PI) / 360);
       const pal = o.pal || world.pal,
         fog = world.fog;
+      if (!flats.has(pal)) flats.set(pal, flat(pal));
+      const out = flats.get(pal),
+        bg = rgb(pal[0]);
       gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
       gl.viewport(0, 0, W, H);
-      const bg = rgb(world.pal[0]);
-      gl.clearColor(bg[0], bg[1], bg[2], 1);
-      gl.clearDepth(1);
-      gl.depthMask(true);
-      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-      gl.enable(gl.DEPTH_TEST);
-      gl.depthFunc(gl.LESS);
       gl.disable(gl.BLEND);
+      gl.clearBufferfv(gl.COLOR, 0, [bg[0], bg[1], bg[2], 1]);
+      gl.clearBufferfv(gl.COLOR, 1, [0, 1, 0, 0]);
+      gl.enable(gl.BLEND);
+      gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
       gl.useProgram(splat.p);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, dataTex);
+      gl.uniform1i(splat.u.u_data, 0);
       gl.uniformMatrix4fv(splat.u.u_view, false, view);
       gl.uniform2f(splat.u.u_size, W, H);
       gl.uniform1f(splat.u.u_focal, focal);
       gl.uniform1f(splat.u.u_near, NEAR);
-      gl.uniform1f(splat.u.u_far, FAR);
       gl.uniform1f(splat.u.u_time, o.time || 0);
       gl.uniform3f(splat.u.u_fog, fog.start, fog.end || fog.start + 1, fog.max);
-      gl.uniform3fv(splat.u.u_fogCol, rgb(world.pal[fog.c]));
+      gl.uniform3fv(splat.u.u_pal, basePal);
+      gl.uniform3fv(splat.u.u_out, out);
+      gl.uniform1i(splat.u.u_n, world.pal.length);
+      gl.uniform1i(splat.u.u_fogI, fog.c);
+      gl.uniform1ui(splat.u.u_dyn, lay.dyn);
       gl.bindVertexArray(vao);
-      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, world.count);
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, drawn);
 
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       gl.viewport(0, 0, W, H);
-      gl.disable(gl.DEPTH_TEST);
+      gl.disable(gl.BLEND);
       gl.useProgram(post.p);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, colTex);
       gl.activeTexture(gl.TEXTURE1);
-      gl.bindTexture(gl.TEXTURE_2D, depTex);
+      gl.bindTexture(gl.TEXTURE_2D, idTex);
       gl.uniform1i(post.u.u_scene, 0);
-      gl.uniform1i(post.u.u_depth, 1);
-      gl.uniform3fv(post.u.u_pal, basePal);
-      gl.uniform3fv(post.u.u_out, pal === world.pal ? basePal : flat(pal));
-      gl.uniform1i(post.u.u_n, world.pal.length);
-      gl.uniform1f(post.u.u_dither, o.dither === undefined ? 0.035 : o.dither);
+      gl.uniform1i(post.u.u_id, 1);
       gl.uniform1f(post.u.u_flash, o.flash || 0);
-      const fc = o.flashCols || [0x24336e, 0xf77fb0, 0xfffaf0];
+      gl.uniform3fv(post.u.u_ink, rgb(pal[1]));
+      const fc = o.flashCols || [0xff7a66, 0xd9604f];
       gl.uniform3fv(post.u.u_flashA, rgb(fc[0]));
       gl.uniform3fv(post.u.u_flashB, rgb(fc[1]));
-      gl.uniform3fv(post.u.u_flashC, rgb(fc[2]));
-      gl.uniform1f(post.u.u_near, NEAR);
-      gl.uniform1f(post.u.u_far, FAR);
       const sk = o.shake || [0, 0];
       gl.uniform2i(post.u.u_shake, Math.round(sk[0]), Math.round(sk[1]));
       gl.bindVertexArray(pvao);

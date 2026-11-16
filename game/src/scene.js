@@ -9,25 +9,25 @@
      street.dyn            first splat that changes from frame to frame (everything from here to the end is sent again each frame)
      street.themes         { day, dusk }: palettes of the same length as the world's own */
 const STREET_PAL = [
-  0x6fc3e8, // 0 sky
-  0x27305e, // 1 shadow navy
-  0x3c4a86, // 2 road dark
-  0x5368a8, // 3 road mid
-  0x7f93c9, // 4 road light
+  0x7ccdea, // 0 sky
+  0x2a4478, // 1 ink: shadows and lines
+  0xd9c7b6, // 2 ground dark
+  0xf0dfc6, // 3 ground mid
+  0xfaf0dc, // 4 ground light
   0xf3e6c8, // 5 cream
   0xfffaf0, // 6 white
-  0xa6e0f2, // 7 sky light
-  0x3f9ad6, // 8 sky deep
-  0xf7b3a4, // 9 cloud pink
-  0xfbd3c4, // 10 cloud pink light
+  0xc4ecf6, // 7 sky light
+  0x4faadd, // 8 sky deep
+  0xf9d6c4, // 9 cloud pink
+  0xfdeee0, // 10 cloud pink light
   0xc9a57f, // 11 wall cream dark
   0xeacb9c, // 12 wall cream
   0xfbe9c4, // 13 wall light
-  0x6f7fae, // 14 wall blue-grey dark
-  0x9aaad0, // 15 wall blue-grey
-  0xc6d2ea, // 16 wall blue-grey light
-  0x24407c, // 17 window dark
-  0x3c68b0, // 18 window
+  0x7f95c8, // 14 wall blue-grey dark
+  0xb7c5e6, // 15 wall blue-grey
+  0xdce4f4, // 16 wall blue-grey light
+  0x2f5f9e, // 17 window dark
+  0x4f8fd0, // 18 window
   0x1f6a3a, // 19 leaf dark
   0x3fa046, // 20 leaf
   0x8fd05a, // 21 leaf light
@@ -49,7 +49,7 @@ const STREET_PAL = [
 ];
 /* the same town late in the day: every colour has its evening one */
 const STREET_DUSK = [
-  0xf7b45a, 0x1b1f3f, 0x25315c, 0x34487a, 0x5a6c9c, 0xf6d9a0, 0xfff1cf, 0xfbd28a, 0xf08a4a, 0xf2775e, 0xf9a878, 0x8f6f72,
+  0xf7b45a, 0x1f2550, 0x8a6a78, 0xc98f6e, 0xf0b77c, 0xf6d9a0, 0xfff1cf, 0xfbd28a, 0xf08a4a, 0xf2775e, 0xf9a878, 0x8f6f72,
   0xc48f6a, 0xf3c07c, 0x3d4a78, 0x5c6b98, 0x8b98b8, 0x161f48, 0x2a3f78, 0x16473c, 0x2b6e44, 0x7fa850, 0x3c2630, 0x7a1838,
   0xc93048, 0xe06a2a, 0xf7b83a, 0xfde08a, 0xb85a48, 0xe89468, 0x1e1230, 0x3f2458, 0x124a5e, 0x1f7f88, 0x62b8ac, 0xb02c7c,
   0xe0689a
@@ -79,6 +79,17 @@ function makeStreet(kit) {
       nv = Math.max(1, Math.ceil(sv / cv)),
       au = opt.along === 'u',
       lift = opt.lift || 0;
+    // first a wash of the middle colour in fat strokes, so that where the brush on top runs dry there is paint under it
+    if (opt.under !== false) {
+      const mu = Math.max(1, Math.ceil(nu / 2)),
+        mv = Math.max(1, Math.ceil(nv / 2)),
+        mid = ramp[Math.floor(ramp.length * (opt.wash === undefined ? 0.55 : opt.wash))];
+      for (let i = 0; i < mu; i++)
+        for (let j = 0; j < mv; j++) {
+          const p = add(add(o, u, ((i + 0.5) / mu) * su), v, ((j + 0.5) / mv) * sv);
+          stroke(p, n, au ? u : v, ((au ? su / mu : sv / mv) * 2.6), ((au ? sv / mv : su / mu) * 2.4), mid, opt.an);
+        }
+    }
     for (let i = 0; i < nu; i++)
       for (let j = 0; j < nv; j++) {
         const fu = ((i + 0.5 + rr(-0.3, 0.3)) / nu) * su,
@@ -133,6 +144,16 @@ function makeStreet(kit) {
       [70, 34, -52, 14],
       [60, 26, 50, 12]
     ].forEach(c => blob([c[0], c[1], c[2]], [c[3], c[3] * 1.5, c[3]], [9, 9, 10, 10], 46, SKYAN));
+    // the sun, high on the left: soft light, then a hard white middle and a few rays
+    const sun = [78, 104, -62];
+    B.iso(sun[0], sun[1], sun[2], 13, P[7], 0.5, SKYAN);
+    B.iso(sun[0], sun[1], sun[2], 7, P[6], 0.75, SKYAN);
+    stroke(sun, norm([-0.5, -0.7, 0.4]), norm([0.2, 0.3, 1]), 13, 9, 6, SKYAN);
+    for (let k = 0; k < 7; k++) {
+      const a = (k / 7) * 6.283 + 0.3,
+        dir = norm([0.3 * Math.cos(a), Math.sin(a), Math.cos(a)]);
+      stroke(add(sun, dir, 15), norm([-0.5, -0.7, 0.4]), dir, rr(9, 15), 1.1, 6, SKYAN);
+    }
   }
 
   // ---------------------------------------------------------------- the ground
@@ -140,25 +161,29 @@ function makeStreet(kit) {
     WALL = 5.3,
     X0 = -14,
     X1 = 78;
+  const ground = B.count();
+  const trees = [];
+  for (const side of [-1, 1])
+    for (let x = side < 0 ? 4 : 8.5; x < X1 - 6; x += rr(8.5, 12))
+      trees.push({ x, side, z: side * (ROAD + 0.75), th: rr(1.9, 2.4), r: rr(1.15, 1.55) });
+  const SHADE = { nd: true }; // (the renderer draws a dab of ink with only this flag as rows of dots)
   {
-    // road: sunlit on the left, in the shadow of the right-hand houses on the right
-    const shadowEdge = x => 0.9 + 0.7 * Math.sin(x * 0.45) + 0.4 * Math.sin(x * 1.3 + 1);
-    paint([X0, 0, -ROAD], [1, 0, 0], [0, 0, 1], UP, X1 - X0, ROAD * 2, [1, 2, 2, 3, 3, 4, 4], {
-      cu: 1.05,
-      cv: 0.42,
-      along: 'u',
-      tone: (fu, fv, p) => (p[2] > shadowEdge(p[0]) ? 0.22 : 0.74)
+    // road: pale, warm
+    paint([X0, 0, -ROAD], [1, 0, 0], [0, 0, 1], UP, X1 - X0, ROAD * 2, [2, 3, 3, 4, 4, 4], {
+      cu: 1.3,
+      cv: 0.5,
+      along: 'u'
     });
     // lane marks
     for (let x = X0; x < X1; x += 4.2) {
-      stroke([x + rr(-0.2, 0.2), 0.05, rr(-0.05, 0.05)], UP, norm([1, 0, rr(-0.03, 0.03)]), rr(2, 2.5), 0.2, R() < 0.8 ? 6 : 5);
+      stroke([x + rr(-0.2, 0.2), 0.05, rr(-0.05, 0.05)], UP, norm([1, 0, rr(-0.03, 0.03)]), rr(2, 2.5), 0.2, R() < 0.5 ? 6 : 16);
     }
     for (let x = X0; x < X1; x += 2.6)
       for (const s of [-1, 1])
-        stroke([x + rr(-0.3, 0.3), 0.05, s * (ROAD - 0.35)], UP, [1, 0, 0], rr(2.6, 3.4), 0.13, s < 0 ? 6 : 16);
+        stroke([x + rr(-0.3, 0.3), 0.05, s * (ROAD - 0.35)], UP, [1, 0, 0], rr(2.6, 3.4), 0.13, R() < 0.5 ? 6 : 16);
     // a crossing ahead
     for (let k = 0; k < 9; k++)
-      stroke([7.5 + rr(-0.1, 0.1), 0.06, -ROAD + 0.6 + k * 0.7], UP, [1, 0, 0], rr(2.5, 2.9), 0.42, k > 5 ? 16 : 6);
+      stroke([7.5 + rr(-0.1, 0.1), 0.06, -ROAD + 0.6 + k * 0.7], UP, [1, 0, 0], rr(2.5, 2.9), 0.42, 6);
     // pavements and kerbs
     for (const s of [-1, 1]) {
       const lit = s < 0;
@@ -169,15 +194,21 @@ function makeStreet(kit) {
         UP,
         X1 - X0,
         WALL - ROAD,
-        lit ? [12, 5, 13, 13, 6] : [14, 15, 15, 16],
+        lit ? [12, 5, 13, 13, 6] : [3, 5, 13, 4],
         { cu: 1.1, cv: 0.6, along: 'u' }
       );
-      paint([X0, 0, s * ROAD], [1, 0, 0], [0, 1, 0], [0, 0, -s], X1 - X0, 0.17, lit ? [11, 12] : [1, 14], {
+      paint([X0, 0, s * ROAD], [1, 0, 0], [0, 1, 0], [0, 0, -s], X1 - X0, 0.17, lit ? [11, 12] : [11, 2], {
         cu: 0.9,
         cv: 0.17,
-        along: 'u'
+        along: 'u',
+        under: false
       });
     }
+    // shadows, in dots: the right-hand houses across the pavement and the edge of the road, and one under every tree
+    for (let x = X0; x < X1; x += 2.4)
+      stroke([x, 0.2, WALL - 0.3 - rr(0, 0.5)], UP, [1, 0, 0], rr(4.5, 6), rr(3.6, 5.2), 1, SHADE);
+    for (const t of trees)
+      stroke([t.x + 0.9, t.side < 0 ? 0.2 : 0.07, t.z - 1.5], UP, norm([0.5, 0, -1]), t.r * 4.2, t.r * 2.3, 1, SHADE);
   }
 
   // ---------------------------------------------------------------- houses
@@ -241,17 +272,8 @@ function makeStreet(kit) {
       );
     }
   }
-  for (const side of [-1, 1]) {
-    let x = X0;
-    while (x < X1 - 2) {
-      const w = rr(5.5, 9.5),
-        h = rr(7, 12.5);
-      house(x, w, h, side);
-      x += w;
-    }
-  }
-  // the end of the street: a row of far houses, and a clock tower over them
-  paint([X1, 0, -16], [0, 0, 1], [0, 1, 0], [-1, 0, 0], 32, 9, [14, 15, 9, 10], { cu: 1.6, along: 'v' });
+  /* everything that stands is made from the far end of the street to the near: paint goes down in the order it is made */
+  const walls = B.count();
   {
     const tx = X1 + 4;
     paint([tx, 0, -3.2], [0, 0, 1], [0, 1, 0], [-1, 0, 0], 6.4, 24, [9, 10, 10, 13], {
@@ -266,14 +288,25 @@ function makeStreet(kit) {
     stroke([tx - 0.9, 19, 0.6], [-1, 0, 0], [0, 0, 1], 1.5, 0.3, 1);
     for (let y = 3; y < 16; y += 3.2) stroke([tx - 0.3, y, 0], [-1, 0, 0], UP, 1.8, 1.0, 17);
   }
+  paint([X1, 0, -16], [0, 0, 1], [0, 1, 0], [-1, 0, 0], 32, 9, [14, 15, 9, 10], { cu: 1.6, along: 'v' });
+  {
+    const row = [];
+    for (const side of [-1, 1]) {
+      let x = X0;
+      while (x < X1 - 2) {
+        const w = rr(5.5, 9.5);
+        row.push({ x, w, h: rr(7, 12.5), side });
+        x += w;
+      }
+    }
+    row.sort((a, b) => b.x - a.x).forEach(q => house(q.x, q.w, q.h, q.side));
+  }
 
   // ---------------------------------------------------------------- trees, lamps, flags
-  for (const side of [-1, 1])
-    for (let x = side < 0 ? 4 : 8.5; x < X1 - 6; x += rr(8.5, 12)) {
-      const z = side * (ROAD + 0.75),
-        th = rr(1.9, 2.4),
-        r = rr(1.15, 1.55),
-        ph = rr(0, 6),
+  const props = B.count();
+  for (const { x, side, z, th, r } of trees) {
+    {
+      const ph = rr(0, 6),
         sway = { k: 14, ph, sp: rr(0.9, 1.4), rg: 0.035, ex: th },
         leaf = side < 0 ? [19, 20, 20, 21, 21] : [19, 19, 20, 20, 21];
       B.stick(x, th / 2 + 0.1, z, UP, th / 2, 0.11, P[22], 3);
@@ -283,6 +316,7 @@ function makeStreet(kit) {
       // a ring of earth round the foot
       stroke([x, 0.2, z], UP, [1, 0, 0], 1.1, 0.8, 22);
     }
+  }
   for (const side of [-1, 1])
     for (let x = -1; x < X1 - 10; x += 13) {
       const z = side * (ROAD + 0.3);
@@ -336,7 +370,7 @@ function makeStreet(kit) {
       dabs.push({ d, e, f: cross(d, e), band: Math.abs(d[1]) < 0.24 });
       B.iso(0, -50, 0, 0.05, P[25], 3);
     }
-    B.iso(0, -50, 0, 0.1, P[1], 3, { nd: true }); // its shadow
+    B.iso(0, -50, 0, 0.1, P[1], 3, SHADE); // its shadow
     let D = null;
     balls.push({
       r: BR,
@@ -409,7 +443,7 @@ function makeStreet(kit) {
   const spec = {
     id: 'kid',
     height: 1.5,
-    res: 0.04,
+    res: 0.045,
     x0: 0,
     hp: 3,
     atk: 'slash',
@@ -492,9 +526,9 @@ function makeStreet(kit) {
           foot = s < 0 ? 'footL' : 'footR',
           z = s * 0.135;
         S.tube([[0, 0.22, z], [0, 0.15, z]], 0.08, 0.086, { r: WHITE }, T(leg));
-        S.ball([0.06, 0.03, z], [0.25, 0.04, 0.15], { r: WHITE }, T(foot));
-        S.ball([0.24, 0.085, z], [0.075, 0.07, 0.12], { r: WHITE }, T(foot));
-        S.ball([-0.13, 0.13, z], [0.07, 0.09, 0.1], { r: [6] }, T(foot));
+        S.ball([0.06, 0.02, z], [0.24, 0.03, 0.14], { r: WHITE }, T(foot));
+        S.ball([0.25, 0.07, z], [0.05, 0.05, 0.1], { r: [26, 27] }, T(foot));
+        S.ball([-0.17, 0.15, z], [0.03, 0.05, 0.05], { r: [33, 34] }, T(foot));
       }
     }
   };
@@ -505,7 +539,7 @@ function makeStreet(kit) {
     detail: 14,
     dither: 1,
     radius: 60,
-    fog: { c: 7, start: 22, end: 95, max: 0.6 }
+    fog: { c: 7, start: 30, end: 100, max: 0.5 }
   });
   ch.bind(world, world.count - ch.total);
   fx.bind(world, fxAt);
@@ -515,6 +549,6 @@ function makeStreet(kit) {
   });
   ch.st.face = 0;
   ch.st.born = 1; // already here: no arriving
-  return { world, ch, balls, fx, dyn, sun: SUN, themes: { day: STREET_PAL, dusk: STREET_DUSK } };
+  return { world, ch, balls, fx, ground, walls, props, dyn, sun: SUN, themes: { day: STREET_PAL, dusk: STREET_DUSK } };
 }
 if (typeof module !== 'undefined') module.exports = { makeStreet, STREET_PAL, STREET_DUSK };
