@@ -1,5 +1,5 @@
 /* The look test: the street from behind the kid, things flying in from the far end, a tap to swing.
-   Expects the toolkit bundle (makeBuilder, KIT), makeStreet and makeRenderer in scope, and a page with #view, #ink, #score, #hour, #hint. */
+   Expects the toolkit bundle (makeBuilder, KIT), the engine, the town, the kid and makeStreet in scope, and a page with #view, #ink, #score, #hour, #hint. */
 (function () {
   const $ = id => document.getElementById(id),
     view = $('view'),
@@ -87,13 +87,7 @@
   $('hour').textContent = G.hour === 'day' ? '夕方にする' : '昼にする';
 
   // ------------------------------------------------------------ things in the air
-  const rot = (ax, a) => {
-    const c = Math.cos(a),
-      s = Math.sin(a),
-      k = 1 - c,
-      [x, y, z] = ax;
-    return [c + x * x * k, x * y * k - z * s, x * z * k + y * s, y * x * k + z * s, c + y * y * k, y * z * k - x * s, z * x * k - y * s, z * y * k + x * s, c + z * z * k];
-  };
+  const rot = turn;
   function launch() {
     const th = G.things.find(k => k.mode === 'off');
     if (!th) return;
@@ -179,54 +173,11 @@
 
   // ------------------------------------------------------------ what is drawn over the picture: speed lines and words
   let lineSeed = 1;
+  const INK = makeInk(ctx);
   function drawInk() {
     ctx.clearRect(0, 0, W, H);
-    if (G.lines > 0) {
-      const k = Math.min(1, G.lines / 0.3),
-        [cx, cy] = G.focus,
-        far = Math.hypot(W, H);
-      let s = lineSeed;
-      const rn = () => ((s = (s * 16807) % 2147483647) & 0xffff) / 0xffff;
-      for (let i = 0; i < 26; i++) {
-        const a0 = (i / 26) * Math.PI * 2 + rn() * 0.2,
-          r0 = H * (0.2 + 0.25 * rn() + 0.25 * (1 - k)),
-          wide = 0.012 + 0.03 * rn(),
-          hairs = 3 + Math.floor(rn() * 4);
-        ctx.fillStyle = i % 3 === 2 ? '#2a4478' : '#fffaf0';
-        ctx.globalAlpha = 0.6 + 0.4 * k;
-        // each line is a few hairs of a dry brush, starting and stopping where they like
-        for (let j = 0; j < hairs; j++) {
-          const a = a0 + (j / hairs - 0.5) * wide * 2,
-            w = (wide / hairs) * (0.5 + rn()),
-            r1 = r0 * (1 + 0.5 * rn());
-          ctx.beginPath();
-          ctx.moveTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1);
-          ctx.lineTo(cx + Math.cos(a - w) * far, cy + Math.sin(a - w) * far);
-          ctx.lineTo(cx + Math.cos(a + w) * far, cy + Math.sin(a + w) * far);
-          ctx.fill();
-        }
-      }
-      ctx.globalAlpha = 1;
-    }
-    for (const wd of G.words) {
-      const u = 1 - wd.life / wd.max,
-        pop = u < 0.12 ? 0.6 + (u / 0.12) * 0.6 : 1.2 - Math.min(1, (u - 0.12) * 4) * 0.2,
-        px = Math.round(H * 0.052 * wd.size * pop);
-      ctx.save();
-      ctx.translate(Math.round(wd.x), Math.round(wd.y - u * H * 0.03));
-      ctx.rotate(wd.rot);
-      ctx.font = '900 italic ' + px + 'px "Arial Black", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.globalAlpha = u > 0.8 ? (1 - u) / 0.2 : 1;
-      ctx.lineJoin = 'round';
-      ctx.lineWidth = Math.max(2, px * 0.28);
-      ctx.strokeStyle = '#fffaf0';
-      ctx.strokeText(wd.str, 0, 0);
-      ctx.fillStyle = wd.col || '#2a4478';
-      ctx.fillText(wd.str, 0, 0);
-      ctx.restore();
-    }
+    if (G.lines > 0) INK.lines(W, H, G.focus, Math.min(1, G.lines / 0.3), lineSeed);
+    INK.words(W, H, G.words);
   }
 
   // ------------------------------------------------------------ the frame

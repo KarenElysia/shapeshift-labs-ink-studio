@@ -8,7 +8,7 @@
      r.resize(w, h)                       the size of the picture in art pixels
      r.upload(first, count)               send rows of world.data again (what moved)
      r.sort()                             put what is sorted in order again (after upload)
-     r.draw({ eye, target, fov, time, pal, flash, flashCols, shake })
+     r.draw({ eye, target, fov, time, pal, flash, flashCols, shake, deep })   deep: [near, far] of what moves, for the lines inside it
      r.project(p)                         a point of the world on the picture: [x, y, depth] in art pixels (y down) */
 function makeRenderer(canvas, world, lay) {
   const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: false, powerPreference: 'high-performance' });
@@ -50,6 +50,7 @@ uniform vec3 u_pal[48];
 uniform vec3 u_out[48];
 uniform int u_n, u_fogI;
 uniform uint u_dyn;                 // from here on a splat is of something that moves: it is outlined
+uniform vec2 u_deep;                // how far off the nearest and the farthest of those may be
 out vec2 v_uv;
 flat out vec4 v_col;
 flat out vec4 v_s;                  // seed, mode (0 brush, 1 soft, 2 dots), outlined, depth
@@ -119,7 +120,7 @@ void main() {
   if (mode != 2.0) col *= 0.93 + 0.14 * seed2;
   if (!glow) col = mix(col, u_out[u_fogI], smoothstep(u_fog.x, u_fog.y, -c.z) * u_fog.z);
   v_col = vec4(col, min(al, 1.0));
-  v_s = vec4(seed, mode, dyn && mode == 0.0 && !glow ? 1.0 : 0.0, clamp(-c.z / 12.0, 0.0, 1.0));
+  v_s = vec4(seed, mode, dyn && mode == 0.0 && !glow ? 1.0 : 0.0, clamp((-c.z - u_deep.x) / (u_deep.y - u_deep.x), 0.0, 1.0));
   v_t = vec4(cut * cut, sqrt(l1 / l2), big, dyn ? 0.3 : 1.0);
   mat3 M = inverse(Sv + mat3(1e-7));
   v_mu = c; v_m0 = M[0]; v_m1 = M[1]; v_m2 = M[2];
@@ -188,7 +189,7 @@ void main() { gl_Position = vec4(a_corner, 0.0, 1.0); }`,
 precision highp float;
 uniform sampler2D u_scene;
 uniform sampler2D u_id;
-uniform float u_flash;
+uniform float u_flash, u_step;
 uniform vec3 u_ink, u_flashA, u_flashB;
 uniform ivec2 u_shake;
 out vec4 o_col;
@@ -208,7 +209,7 @@ void main() {
     if (b.r > 0.5) step4 = max(step4, b.g - me.g);
     if (c.r > 0.5) step4 = max(step4, c.g - me.g);
     if (e.r > 0.5) step4 = max(step4, e.g - me.g);
-    if (step4 > 0.009) col = mix(col, u_ink, 0.75);
+    if (step4 > u_step) col = mix(col, u_ink, 0.75);
   }
   if (u_flash > 0.0) {
     // the moment of a hit: the town gone to one flat colour with dots, what moves in a few loud colours
@@ -437,6 +438,8 @@ void main() {
       gl.uniform1i(splat.u.u_n, world.pal.length);
       gl.uniform1i(splat.u.u_fogI, fog.c);
       gl.uniform1ui(splat.u.u_dyn, lay.dyn);
+      const deep = o.deep || [0, 12];
+      gl.uniform2f(splat.u.u_deep, deep[0], deep[1]);
       gl.bindVertexArray(vao);
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, drawn);
 
@@ -451,6 +454,7 @@ void main() {
       gl.uniform1i(post.u.u_scene, 0);
       gl.uniform1i(post.u.u_id, 1);
       gl.uniform1f(post.u.u_flash, o.flash || 0);
+      gl.uniform1f(post.u.u_step, Math.max(0.0045, 0.11 / (deep[1] - deep[0])));
       gl.uniform3fv(post.u.u_ink, rgb(pal[1]));
       const fc = o.flashCols || [0xff7a66, 0xd9604f];
       gl.uniform3fv(post.u.u_flashA, rgb(fc[0]));
