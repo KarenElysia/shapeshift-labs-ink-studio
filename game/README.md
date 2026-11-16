@@ -1,15 +1,21 @@
-# Street look test
+# Painted look tests
 
-A real-time look test for a casual hit-it-back game: a painted street seen from behind a kid with a bat, drawn in the browser with WebGL2.
+Real-time look tests drawn in the browser with WebGL2: the toolkit's splats painted as brush strokes.
 
 ```sh
 node game/build.js
 ```
 
-This writes `game/dist/index.html`, one self-contained page (the toolkit bundle plus the scripts in `game/src/`). Open it in a browser; tap or press Space to swing.
+This writes one self-contained page for each look test to `game/dist/`:
 
-- `src/scene.js`: the street as brush dabs, the things that fly in, and the kid (`K.character`).
-- `src/renderer.js`: instanced splats painted as blended brush strokes (bristles, dry ends, dotted shadows), sorted far to near, then an outline round what moves.
-- `src/main.js`: the loop, input, camera, hit stop, flash, speed lines and words.
+- `street.html`: a street seen from behind a kid with a bat. Tap or press Space to hit back what flies in.
+- `tennis.html`: a court chalked on the street, a rival across the net, seen from above and behind by an eye that follows the play. Drag (or arrow keys) to move, tap (or Space) to swing. How early or late you meet the thing, and which side of you it is on, decides where it goes. There is no score.
 
-Page options: `?fps=1` shows the frame rate, `?hour=dusk` starts in the evening, `?auto=0` turns off the self-playing swing.
+Page options: `?fps=1` shows the frame rate, `?hour=dusk` starts in the evening, `?auto=0` turns off self-play.
+
+## Layout
+
+- `engine/`: what any page can reuse. See [engine/README.md](engine/README.md).
+- `town.js`: the painted street and its two palettes (day and dusk).
+- `kid.js`: the character spec, with its colours and what it holds as options.
+- `street/`, `tennis/`: each look test's world and its loop.

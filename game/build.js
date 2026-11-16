@@ -11,7 +11,7 @@ const src = f => fs.readFileSync(path.join(__dirname, f), 'utf8').replace(/\nif 
     tennis: {
       title: 'Street Tennis',
       files: ['tennis/court.js', 'tennis/main.js'],
-      hint: 'ドラッグで移動 / タップで打つ（PCは矢印キーとスペース）',
+      hint: 'ドラッグで移動、タップで打つ',
       tally: 'RALLY'
     }
   };
