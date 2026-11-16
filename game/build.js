@@ -55,4 +55,10 @@ ${code}
 const out = path.join(__dirname, 'dist');
 fs.mkdirSync(out, { recursive: true });
 fs.writeFileSync(path.join(out, 'index.html'), html);
+// the same page without its outer tags, for a host that wraps what it is given in a document of its own
+const inner = html
+  .replace(/^[\s\S]*?<title>/, '<title>')
+  .replace('</head>\n<body>\n', '')
+  .replace(/<\/body>\n<\/html>\n$/, '');
+fs.writeFileSync(path.join(out, 'street-slugger.html'), inner);
 console.log('wrote game/dist/index.html', (html.length / 1024).toFixed(0) + ' KB');
