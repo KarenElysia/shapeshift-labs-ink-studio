@@ -13,9 +13,12 @@ Draws an ink-studio world in real time as brush strokes. Four plain scripts, loa
 
 Strokes are blended, so they go down far to near. The renderer keeps to this with three ranges of the world's splats:
 
-1. Before `props`: scenery, drawn in the order it was made. Make sky first, then ground, then what stands on it from far to near.
-2. From `props` to `dyn`: things that stand still among what moves (trees, a net). Sorted by distance once.
-3. From `dyn` on: what changes each frame. Sorted every frame, outlined, and sent to the card again by `upload`.
+1. Before `walls` (or `props`): sky and ground, drawn in the order they were made.
+2. From `walls` to `props`, if `groups` is given: whole buildings, each drawn as it was made, the buildings put in order far to near for the way the eye looks now. Without `groups` this range is drawn as made, which only suits an eye that keeps looking one way.
+3. From `props` to `dyn`: things that stand still among what moves (trees, a net). Sorted dab by dab.
+4. From `dyn` on: what changes each frame. Sorted every frame, outlined, and sent to the card again by `upload`. From `hero` on it also stays in the picture at the moment of a hit; between `dyn` and `hero` (people in the street) it goes with the town.
+
+Call `R.sort(eye, target)` with the eye of the frame after `upload`. `R.draw` takes `near` to leave out what stands between a close eye and what it looks at (it never hides sky, ground or buildings).
 
 ## Smallest use
 
@@ -29,12 +32,13 @@ const props = B.count(),
   world = B.finish({ fog: { c: 7, start: 30, end: 100, max: 0.5 } });
 ball.bind(world);
 const R = makeRenderer(canvas, world, { props, dyn, eye: [-6, 3, 0], target: [0, 0.5, 0] });
+const EYE = [-6, 3, 0], AT = [0, 0.5, 0];
 R.resize(200, 300);
 function frame(t) {
   ball.write([0, 1 + Math.abs(Math.sin(t / 300)), 0], turn([0, 0, 1], t / 200), true);
   R.upload(dyn, world.count - dyn);
-  R.sort();
-  R.draw({ eye: [-6, 3, 0], target: [0, 0.5, 0], fov: 50, time: t / 1000 });
+  R.sort(EYE, AT);
+  R.draw({ eye: EYE, target: AT, fov: 50, time: t / 1000 });
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

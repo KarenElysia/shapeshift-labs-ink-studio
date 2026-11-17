@@ -5,13 +5,16 @@ const fs = require('fs'),
   path = require('path'),
   studio = require('../index.js');
 const src = f => fs.readFileSync(path.join(__dirname, f), 'utf8').replace(/\nif \(typeof module[^\n]*\n?$/, '\n'),
-  ENGINE = ['engine/paint.js', 'engine/things.js', 'engine/ink.js', 'engine/renderer.js', 'town.js', 'kid.js'],
+  ENGINE = ['engine/paint.js', 'engine/things.js', 'engine/ink.js', 'engine/renderer.js', 'town.js', 'kid.js', 'life.js'],
   PAGES = {
     street: { title: 'Street Slugger', files: ['street/scene.js', 'street/main.js'], hint: '画面をタップ / スペースキーで打ち返す', tally: 'HIT' },
     tennis: {
       title: 'Street Tennis',
       files: ['tennis/court.js', 'tennis/main.js'],
       hint: 'ドラッグで移動、タップで打つ',
+      extra: `<div id="cams" role="group" aria-label="カメラ">${['俯瞰', '背中', '横', '正面']
+        .map((l, i) => `<button type="button" aria-pressed="false" title="${i + 1}キー"><b>${i + 1}</b>${l}</button>`)
+        .join('')}</div>`,
       tally: 'RALLY'
     }
   };
@@ -40,6 +43,14 @@ for (const [name, page] of Object.entries(PAGES)) {
     padding: 8px 12px; box-shadow: 4px 4px 0 var(--ink); cursor: pointer; }
   #hour:active { transform: translate(2px, 2px); box-shadow: 2px 2px 0 var(--ink); }
   #hint { left: 16px; right: 16px; bottom: max(28px, env(safe-area-inset-bottom)); text-align: center; font-size: 14px; transition: opacity 0.4s; }
+  #cams { position: fixed; z-index: 2; right: max(16px, env(safe-area-inset-right)); top: calc(max(14px, env(safe-area-inset-top)) + 50px);
+    display: flex; gap: 6px; }
+  #cams button { font: inherit; font-size: 12px; color: var(--ink); background: var(--paper); border: 3px solid var(--ink); border-radius: 0;
+    padding: 5px 7px; box-shadow: 3px 3px 0 var(--ink); cursor: pointer; display: flex; gap: 4px; align-items: baseline; }
+  #cams button b { font-size: 10px; opacity: 0.6; }
+  #cams button[aria-pressed="true"] { background: var(--sun); }
+  #cams button:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--ink); }
+  #cams button:focus-visible, #hour:focus-visible { outline: 3px solid var(--sun); outline-offset: 2px; }
   #fps { left: 16px; bottom: 8px; font-size: 11px; font-family: ui-monospace, monospace; }
   #wait { position: fixed; inset: 0; display: grid; place-items: center; background: #7ccdea; z-index: 3; font-size: 18px; }
 </style>
@@ -49,6 +60,7 @@ for (const [name, page] of Object.entries(PAGES)) {
 <canvas id="ink"></canvas>
 <div id="tally" class="hud">${page.tally}<span id="score">0</span></div>
 <button id="hour" type="button"></button>
+${page.extra || ''}
 <div id="hint" class="hud">${page.hint}</div>
 <div id="fps" class="hud"></div>
 <div id="wait" class="hud">まちを描いています…</div>

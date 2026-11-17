@@ -4,6 +4,8 @@
        spec.parts   [{ c: [x, y, z], r: radius or [rx, ry, rz], n: dabs, col(lit, d) }]: col picks a palette colour from how lit
                     the dab is (0..1) and where on the part it lies (d, a unit vector in the thing's own frame)
        spec.r       its size for bouncing and for its shadow
+       spec.sh      [along, across]: the shadow's half-lengths along its own x and z, if it is not round
+       spec.shadow  false for no shadow (a part of something that has one)
      th.bind(world)                       after B.finish
      th.write(p, m, on, big)              p where it is, m a 3 by 3 turn (rows), on whether it is there at all, big its size (1 as made)
      turn(axis, angle)                    such a turn */
@@ -41,7 +43,8 @@ function makeThing(B, T, spec) {
       B.iso(0, -50, 0, 0.05, P[1], 3);
     }
   }
-  B.iso(0, -50, 0, 0.1, P[1], 3, SHADE);
+  const shadow = spec.shadow !== false;
+  if (shadow) B.iso(0, -50, 0, 0.1, P[1], 3, SHADE);
   const N = dabs.length;
   let D = null;
   return {
@@ -84,20 +87,27 @@ function makeThing(B, T, spec) {
         D[o + 10] = A * ez * ez + Bq * fz * fz + C * nz * nz;
         D[o + 7] = PK[q.col(0.5 + 0.5 * (nx * SUN[0] + ny * SUN[1] + nz * SUN[2]), q.d)];
       }
+      if (!shadow) return;
       const s = (first + N) * 16;
       if (!on || p[1] > 9) {
         D[s + 1] = -50;
         return;
       }
-      const k = spec.r * big * (1 + p[1] * 0.12),
-        a = k * k * 0.55;
+      const f = big * (1 + p[1] * 0.12),
+        sh = spec.sh || [spec.r, spec.r],
+        A = sh[0] * sh[0] * f * f * 0.55,
+        Bq = sh[1] * sh[1] * f * f * 0.55,
+        ul = Math.hypot(m[0], m[6]) || 1,
+        ux = m[0] / ul,
+        uz = m[6] / ul;
       D[s] = p[0];
       D[s + 1] = 0.045;
       D[s + 2] = p[2];
-      D[s + 4] = a;
-      D[s + 5] = D[s + 6] = D[s + 9] = 0;
+      D[s + 4] = A * ux * ux + Bq * uz * uz;
+      D[s + 6] = (A - Bq) * ux * uz;
+      D[s + 5] = D[s + 9] = 0;
       D[s + 8] = 0.00005;
-      D[s + 10] = a;
+      D[s + 10] = A * uz * uz + Bq * ux * ux;
     }
   };
 }

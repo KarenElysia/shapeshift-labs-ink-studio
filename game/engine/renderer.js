@@ -4,11 +4,16 @@
    down from far to near: the scenery is drawn in the order it was made (the scene makes it far to near), and everything from
    `props` on is sorted each frame. A second picture records which pixels belong to what moves, and how far off they are; the last pass
    draws a dark line round those, and at the moment of a hit replaces the town with flat colour and dots.
-     const r = makeRenderer(canvas, world, { props, dyn, eye, target })
+     const r = makeRenderer(canvas, world, { walls, groups, props, dyn, hero, eye, target })
+       walls, groups   optional: from `walls` to `props` the world is made of groups ([{ a, b, c }]: splats a to b, standing round c),
+                       each drawn whole, the groups put in order far to near for the way the eye looks. Before `walls` (or `props`, if
+                       there are no groups) everything is drawn in the order it was made: sky first, then the ground
+       hero            optional: from here on what moves stays in the picture at the moment of a hit (dyn, if not given)
+       eye, target     the way the eye looks until sort is told otherwise
      r.resize(w, h)                       the size of the picture in art pixels
      r.upload(first, count)               send rows of world.data again (what moved)
-     r.sort()                             put what is sorted in order again (after upload)
-     r.draw({ eye, target, fov, time, pal, flash, flashCols, shake, deep })   deep: [near, far] of what moves, for the lines inside it
+     r.sort(eye, target)                  put what is sorted in order again for an eye looking this way (after upload)
+     r.draw({ eye, target, fov, time, pal, flash, flashCols, shake, deep, near })   near: nothing that stands (from props on) nearer the eye than this is drawn   deep: [near, far] of what moves, for the lines inside it
      r.project(p)                         a point of the world on the picture: [x, y, depth] in art pixels (y down) */
 function makeRenderer(canvas, world, lay) {
   const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: false, powerPreference: 'high-performance' });
@@ -50,10 +55,15 @@ uniform vec3 u_pal[48];
 uniform vec3 u_out[48];
 uniform int u_n, u_fogI;
 uniform uint u_dyn;                 // from here on a splat is of something that moves: it is outlined
+uniform uint u_hero;                // from here on it is still there at the moment of a hit
+uniform uint u_props;               // from here on u_near applies: scenery before it is always drawn
+uniform float u_near0;
 uniform vec2 u_deep;                // how far off the nearest and the farthest of those may be
 out vec2 v_uv;
 flat out vec4 v_col;
 flat out vec4 v_s;                  // seed, mode (0 brush, 1 soft, 2 dots), outlined, depth
+flat out float v_hero;
+flat out float v_near;
 flat out vec4 v_t;                  // cut squared, how long for its width, large on screen, how ragged
 flat out vec3 v_mu, v_m0, v_m1, v_m2;
 float hash(float n) { return fract(sin(n * 12.9898) * 43758.5453); }
@@ -77,7 +87,9 @@ void main() {
     p.y += rg * 0.6 * sin(u_time * sp * 1.3 + x0 * 1.1 + ph);
   }
   vec3 c = (u_view * vec4(p, 1.0)).xyz;
-  if (al <= 0.0 || a_p.y < -30.0 || c.z > -u_near) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  float nr = a_idx >= u_props ? u_near : u_near0;
+  v_near = nr;
+  if (al <= 0.0 || a_p.y < -30.0 || c.z > -nr) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
   // its colour: the nearest of the palette, then that colour at this hour
   float pk = a_c0.w;
   vec3 col = vec3(mod(pk, 256.0), mod(floor(pk / 256.0), 256.0), floor(pk / 65536.0)) / 255.0;
@@ -122,6 +134,7 @@ void main() {
   v_col = vec4(col, min(al, 1.0));
   v_s = vec4(seed, mode, dyn && mode == 0.0 && !glow ? 1.0 : 0.0, clamp((-c.z - u_deep.x) / (u_deep.y - u_deep.x), 0.0, 1.0));
   v_t = vec4(cut * cut, sqrt(l1 / l2), big, dyn ? 0.3 : 1.0);
+  v_hero = a_idx >= u_hero && v_s.z > 0.5 ? 1.0 : 0.0;
   mat3 M = inverse(Sv + mat3(1e-7));
   v_mu = c; v_m0 = M[0]; v_m1 = M[1]; v_m2 = M[2];
 }`,
@@ -131,6 +144,8 @@ in vec2 v_uv;
 flat in vec4 v_col;
 flat in vec4 v_s;
 flat in vec4 v_t;
+flat in float v_hero;
+flat in float v_near;
 flat in vec3 v_mu, v_m0, v_m1, v_m2;
 uniform vec2 u_size;
 uniform float u_focal, u_near;
@@ -148,7 +163,7 @@ void main() {
   mat3 M = mat3(v_m0, v_m1, v_m2);
   vec3 Md = M * d;
   float dd = max(dot(Md, d), 1e-9), dm = dot(Md, v_mu);
-  if (dm < u_near * dd) discard;
+  if (dm < v_near * dd) discard;
   float u = v_uv.x, v = v_uv.y, a;
   vec3 col = v_col.rgb;
   if (v_s.y == 1.0) a = v_col.a * exp(-0.5 * dot(v_uv, v_uv) * v_t.x);
@@ -176,7 +191,7 @@ void main() {
   }
   if (a < 0.02) discard;
   o_col = vec4(col, a);
-  o_id = vec4(v_s.z, v_s.w, 0.0, a);
+  o_id = vec4(v_s.z, v_s.w, v_hero, a);
 }`
   );
 
@@ -214,7 +229,7 @@ void main() {
   if (u_flash > 0.0) {
     // the moment of a hit: the town gone to one flat colour with dots, what moves in a few loud colours
     vec3 f;
-    if (mine) {
+    if (me.b > 0.5) {
       float l = dot(col, vec3(0.30, 0.55, 0.15));
       f = clamp(mix(vec3(l), col, 1.7), 0.0, 1.0);
       f = floor(f * 3.0 + 0.5) / 3.0;
@@ -225,7 +240,7 @@ void main() {
     }
     col = mix(col, f, u_flash);
   }
-  if (line) col = mix(col, u_ink, 0.9);
+  if (line && (u_flash < 0.5 || max(max(a.b, b.b), max(c.b, e.b)) > 0.5)) col = mix(col, u_ink, 0.9);
   o_col = vec4(col, 1.0);
 }`
   );
@@ -269,35 +284,43 @@ void main() {
   gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
   gl.bindVertexArray(null);
 
-  /* far to near, for everything from lay.props on: measured along the way the eye usually looks, so that what stands still keeps its
-     place in the order while the eye sways. A shadow goes down before what stands on it */
+  /* far to near, for everything from lay.props on, measured along the way the eye looks; a shadow goes down before what stands on
+     it. Groups (whole houses) are put in order the same way, each drawn as it was made */
   const P0 = lay.props,
+    G0 = lay.groups ? lay.walls : P0,
+    groups = lay.groups || [],
+    gkeys = groups.map((g, i) => [0, i]),
     NS = N - P0,
     keys = new Uint32Array(NS),
-    fixed = new Float32Array(NS),
-    ex = lay.eye,
-    fl = Math.hypot(lay.target[0] - ex[0], lay.target[1] - ex[1], lay.target[2] - ex[2]),
-    fw = [(lay.target[0] - ex[0]) / fl, (lay.target[1] - ex[1]) / fl, (lay.target[2] - ex[2]) / fl],
     D = world.data,
     shadowCol = ((world.pal[1] >> 16) & 255) + ((world.pal[1] >> 8) & 255) * 256 + (world.pal[1] & 255) * 65536;
   if (NS > 65535) throw new Error('too many splats to sort');
-  const depthOf = i => {
-    const o = i * 16;
-    return (D[o] - ex[0]) * fw[0] + (D[o + 1] - ex[1]) * fw[1] + (D[o + 2] - ex[2]) * fw[2];
-  };
-  for (let i = P0; i < lay.dyn; i++) fixed[i - P0] = depthOf(i);
   let drawn = N;
-  function sort() {
+  function sort(eye, target) {
+    const ex = eye || lay.eye,
+      tg = target || lay.target,
+      fl = Math.hypot(tg[0] - ex[0], tg[1] - ex[1], tg[2] - ex[2]) || 1,
+      f0 = (tg[0] - ex[0]) / fl,
+      f1 = (tg[1] - ex[1]) / fl,
+      f2 = (tg[2] - ex[2]) / fl;
+    if (groups.length) {
+      for (const k of gkeys) {
+        const c = groups[k[1]].c;
+        k[0] = (c[0] - ex[0]) * f0 + (c[1] - ex[1]) * f1 + (c[2] - ex[2]) * f2;
+      }
+      gkeys.sort((p, q) => q[0] - p[0]);
+      let at = G0;
+      for (const k of gkeys) {
+        const g = groups[k[1]];
+        for (let i = g.a; i < g.b; i++) order[at++] = i;
+      }
+    }
     let n = 0;
     for (let i = P0; i < N; i++) {
       const o = i * 16;
-      let z;
-      if (i < lay.dyn) z = fixed[i - P0];
-      else {
-        if (D[o + 1] < -30 || D[o + 3] <= 0) continue;
-        z = depthOf(i);
-        if (D[o + 11] === 16 && D[o + 7] === shadowCol) z += 4;
-      }
+      if (i >= lay.dyn && (D[o + 1] < -30 || D[o + 3] <= 0)) continue;
+      let z = (D[o] - ex[0]) * f0 + (D[o + 1] - ex[1]) * f1 + (D[o + 2] - ex[2]) * f2;
+      if (D[o + 11] === 16 && D[o + 7] === shadowCol) z += 4;
       const q = z <= 0 ? 0 : z >= 160 ? 65535 : (z * 409.59) | 0;
       keys[n++] = (65535 - q) * 65536 + (i - P0);
     }
@@ -305,7 +328,7 @@ void main() {
     for (let k = 0; k < n; k++) order[P0 + k] = P0 + (keys[k] & 65535);
     drawn = P0 + n;
     gl.bindBuffer(gl.ARRAY_BUFFER, orderBuf);
-    gl.bufferSubData(gl.ARRAY_BUFFER, P0 * 4, order, P0, n);
+    gl.bufferSubData(gl.ARRAY_BUFFER, G0 * 4, order, G0, drawn - G0);
   }
 
   let W = 0,
@@ -430,7 +453,9 @@ void main() {
       gl.uniformMatrix4fv(splat.u.u_view, false, view);
       gl.uniform2f(splat.u.u_size, W, H);
       gl.uniform1f(splat.u.u_focal, focal);
-      gl.uniform1f(splat.u.u_near, NEAR);
+      gl.uniform1f(splat.u.u_near, o.near || NEAR);
+      gl.uniform1f(splat.u.u_near0, NEAR);
+      gl.uniform1ui(splat.u.u_props, lay.props);
       gl.uniform1f(splat.u.u_time, o.time || 0);
       gl.uniform3f(splat.u.u_fog, fog.start, fog.end || fog.start + 1, fog.max);
       gl.uniform3fv(splat.u.u_pal, basePal);
@@ -438,6 +463,7 @@ void main() {
       gl.uniform1i(splat.u.u_n, world.pal.length);
       gl.uniform1i(splat.u.u_fogI, fog.c);
       gl.uniform1ui(splat.u.u_dyn, lay.dyn);
+      gl.uniform1ui(splat.u.u_hero, lay.hero === undefined ? lay.dyn : lay.hero);
       const deep = o.deep || [0, 12];
       gl.uniform2f(splat.u.u_deep, deep[0], deep[1]);
       gl.bindVertexArray(vao);

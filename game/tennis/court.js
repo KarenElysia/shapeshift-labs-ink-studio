@@ -3,6 +3,7 @@
      const court = makeCourt({ makeBuilder, KIT })
      court.world, court.me, court.rival (K.character, bound), court.things (makeThing), court.fx (K.play.fx, bound)
      court.props, court.dyn      the first splat that is sorted each frame, and the first that changes each frame
+     court.town, court.life, court.hero   the town (its groups), the people in it, and where the players' own splats begin
      court.CX, court.CZ, court.NET   half the court's length and width, and how high the net is */
 function makeCourt(kit) {
   const { makeBuilder, KIT: K } = kit;
@@ -18,6 +19,7 @@ function makeCourt(kit) {
   const town = makeTown(B, T, {
     x0: -26,
     crossing: false,
+    side: { x: 28.5, w: 5 },
     flags: [17, 28, 40, 52],
     onGround() {
       // the court: a wash of chalky blue, then its lines
@@ -51,6 +53,8 @@ function makeCourt(kit) {
     }
   });
   const dyn = B.count(),
+    life = makeLife(B, T, town, { watch: [[-3.2, -4.45], [2.6, 4.45], [6.4, -4.45]] }),
+    hero = B.count(),
     things = [THINGS.ball, THINGS.melon, THINGS.duck].map(spec => makeThing(B, T, spec)),
     fx = K.play.fx(B, 240),
     fxAt = B.count() - fx.total,
@@ -73,6 +77,8 @@ function makeCourt(kit) {
   me.bind(world, meAt);
   rival.bind(world, rivalAt);
   fx.bind(world, fxAt);
+  life.bind(world);
+  life.update(0, 0);
   things.forEach(t => {
     t.bind(world);
     t.write([0, 0, 0], [1, 0, 0, 0, 1, 0, 0, 0, 1], false);
@@ -82,6 +88,6 @@ function makeCourt(kit) {
   rival.st.x = 5;
   rival.st.face = Math.PI;
   me.st.born = rival.st.born = 1;
-  return { world, me, rival, things, fx, props: town.props, dyn, CX, CZ, NET, themes: { day: TOWN_PAL, dusk: TOWN_DUSK } };
+  return { world, me, rival, things, fx, town, life, hero, props: town.props, dyn, CX, CZ, NET, themes: { day: TOWN_PAL, dusk: TOWN_DUSK } };
 }
 if (typeof module !== 'undefined') module.exports = { makeCourt };

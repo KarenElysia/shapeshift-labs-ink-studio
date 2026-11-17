@@ -14,7 +14,16 @@
       tall: { eye: [-16.5, 8.2, 0], target: [-0.6, 0.6, 0], fov: 50 },
       wide: { eye: [-13.5, 6.6, 0], target: [0, 0.6, 0], fov: 40 }
     },
-    R = makeRenderer(view, world, { props: court.props, dyn: court.dyn, eye: CAM.tall.eye, target: CAM.tall.target }),
+    R = makeRenderer(view, world, {
+      walls: court.town.walls,
+      groups: court.town.groups,
+      props: court.props,
+      dyn: court.dyn,
+      hero: court.hero,
+      eye: CAM.tall.eye,
+      target: CAM.tall.target
+    }),
+    VIEWS = ['俯瞰', '背中', '横', '正面'],
     INK = makeInk(ctx),
     rnd = (a, b) => a + (b - a) * Math.random(),
     clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -67,7 +76,9 @@
     shots: [], // (for looking at what the swing does: where each of the player's shots was sent)
     done: [], // (and how long each rally that has ended was)
     ball: { on: false, th: things[0], p: [0, 1, 0], v: [0, 0, 0], spin: 0, ax: [0, 0, 1], bounces: 0, side: 0, by: null, dead: 0, big: 1 },
-    cam: { z: 0, tz: 0, tx: 0 }
+    cam: { z: 0, tz: 0, tx: 0 },
+    view: Math.max(0, Math.min(3, (+q.get('cam') || 1) - 1)), // which of the eyes is chosen (VIEWS)
+    eye: null // where the eye is now: { eye, target, fov }, on its way to where the chosen one wants it
   };
   window.__game = G;
   const say = (str, p, o) => {
@@ -140,11 +151,29 @@
     if (KEYS[e.code]) G.keys[KEYS[e.code]] = false;
   });
   const setHour = () => ($('hour').textContent = G.hour === 'day' ? '夕方にする' : '昼にする');
-  $('hour').addEventListener('click', () => {
+  $('hour').addEventListener('click', e => {
     G.hour = G.hour === 'day' ? 'dusk' : 'day';
     setHour();
+    e.currentTarget.blur(); // (or Space, which swings, would press it again)
   });
   setHour();
+  const camButtons = Array.from(document.querySelectorAll('#cams button'));
+  const setView = i => {
+    G.view = (i + VIEWS.length) % VIEWS.length;
+    camButtons.forEach((b, k) => b.setAttribute('aria-pressed', k === G.view ? 'true' : 'false'));
+  };
+  camButtons.forEach((b, k) =>
+    b.addEventListener('click', () => {
+      setView(k);
+      b.blur();
+    })
+  );
+  window.addEventListener('keydown', e => {
+    const n = /^(Digit|Numpad)([1-4])$/.exec(e.code);
+    if (n) setView(+n[2] - 1);
+    else if (e.code === 'KeyC') setView(G.view + 1);
+  });
+  setView(G.view);
 
   // ------------------------------------------------------------ the thing in the air
   /* send it from where it is to land at (tx, tz) after `time` seconds; if that would not clear the net, lob it higher */
@@ -335,6 +364,7 @@
     fx.sparks(b.p[0], b.p[1], b.p[2], 27, big ? 16 : 7, big ? 9 : 5, -w.s, 0);
     w.ch.react('spring', { dur: 0.5, k: big ? 0.7 : 0.35 });
     if (big) {
+      court.life.cheer();
       b.big = 1.5;
       G.stop = 0.09;
       G.flash = 1;
@@ -426,6 +456,7 @@
     }
     for (const w of who) stepWho(w, dt);
     stepBall(dt);
+    court.life.update(dt, G.t);
     fx.update(dt);
     G.shake = Math.max(0, G.shake - dt * 3.2);
     G.punch = Math.max(0, G.punch - dt * 2.2);
@@ -441,13 +472,57 @@
     c.z += (me.st.z * 0.62 + bz * 0.12 - c.z) * k;
     c.tz += (me.st.z * 0.3 + bz * 0.3 - c.tz) * k;
     c.tx += (bx * 0.1 + (me.st.x + 5.2) * 0.35 - c.tx) * k;
+    const want = aim(G.view, b),
+      e = G.eye || (G.eye = { eye: want.eye.slice(), target: want.target.slice(), fov: want.fov }),
+      ke = 1 - Math.exp(-dt * 4.5);
+    for (let i = 0; i < 3; i++) {
+      e.eye[i] += (want.eye[i] - e.eye[i]) * ke;
+      e.target[i] += (want.target[i] - e.target[i]) * ke;
+    }
+    e.fov += (want.fov - e.fov) * ke;
+    e.near = (e.near || 0.25) + ((want.near || 0.25) - (e.near || 0.25)) * ke;
+  }
+  /* where each of the eyes wants to be. 0 from high behind, the whole court; 1 just behind the player's back; 2 from the pavement on
+     their left, side on; 3 from in front of them, looking back at their face */
+  function aim(v, b) {
+    const st = me.st,
+      bz = b.on ? b.p[2] : st.z,
+      c = G.cam;
+    if (v === 1)
+      return {
+        eye: [st.x - 3.5, 2.35, st.z * 0.75 + 0.45],
+        target: [st.x + 2.8, 0.95, st.z * 0.5 + bz * 0.2],
+        fov: tall ? 60 : 46
+      };
+    if (v === 2) {
+      // (from the edge of the houses: the trees and posts between are left out of the picture, see `near` in draw)
+      const ez = Math.max(-5.1, st.z - 4.6),
+        d = st.z - ez;
+      return {
+        eye: [st.x + (tall ? 0.15 : 0.6), 1.5, ez],
+        target: [st.x + (tall ? 0.15 : 0.6), 0.9, st.z],
+        fov: clamp((2 * Math.atan((tall ? 2.0 : 1.5) / d) * 180) / Math.PI, 40, tall ? 84 : 66),
+        near: Math.max(0.25, d - 1.4)
+      };
+    }
+    if (v === 3)
+      return {
+        eye: [st.x + 4.0, 1.5, st.z + 0.9],
+        target: [st.x - 0.1, 0.9, st.z],
+        fov: tall ? 52 : 40
+      };
+    const base = tall ? CAM.tall : CAM.wide;
+    return {
+      eye: [base.eye[0] + c.tx * 0.6, base.eye[1], base.eye[2] + c.z],
+      target: [base.target[0] + c.tx, base.target[1], base.target[2] + c.tz],
+      fov: base.fov
+    };
   }
   function draw() {
-    const base = tall ? CAM.tall : CAM.wide,
-      c = G.cam,
-      k = G.punch * G.punch * (3 - 2 * G.punch),
-      eye = [base.eye[0] + c.tx * 0.6, base.eye[1], base.eye[2] + c.z],
-      tgt = [base.target[0] + c.tx, base.target[1], base.target[2] + c.tz],
+    if (!G.eye) step(0);
+    const k = G.punch * G.punch * (3 - 2 * G.punch),
+      eye = G.eye.eye.slice(),
+      tgt = G.eye.target.slice(),
       b = G.ball;
     // at a great hit it goes in a little toward where it happened
     if (k > 0 && b.on) {
@@ -461,13 +536,17 @@
     R.draw({
       eye,
       target: tgt,
-      fov: base.fov - 5 * k,
+      fov: G.eye.fov - 5 * k,
+      near: G.eye.near,
       time: G.t,
       pal: court.themes[G.hour],
       flash: G.flash,
       flashCols: FLASH[G.hour],
       shake: [Math.sin(frame * 2.7) * sk, Math.cos(frame * 3.9) * sk],
-      deep: [5, 37]
+      deep: (() => {
+        const d = Math.hypot(me.st.x - eye[0], 1 - eye[1], me.st.z - eye[2]);
+        return [Math.max(0.3, d - 3), d + 32];
+      })()
     });
     ctx.clearRect(0, 0, W, H);
     if (G.lines > 0) INK.lines(W, H, G.focus, Math.min(1, G.lines / 0.3), lineSeed);
@@ -479,7 +558,7 @@
     frame++;
     step(dt);
     R.upload(court.dyn, world.count - court.dyn);
-    R.sort();
+    R.sort(G.eye && G.eye.eye, G.eye && G.eye.target);
     draw();
     fpsN++;
     if (now - fpsT > 1000) {
@@ -497,10 +576,11 @@
       step(1 / 60);
     }
     R.upload(court.dyn, world.count - court.dyn);
-    R.sort();
+    R.sort(G.eye && G.eye.eye, G.eye && G.eye.target);
     draw();
   };
   G.who = who;
+  G.life = court.life;
   G.ready = true;
   if (q.get('still')) G.run(0.02);
   else requestAnimationFrame(tick);

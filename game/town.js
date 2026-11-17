@@ -6,7 +6,10 @@
        opt.flags     where strings of flags hang across the street ([9, 19, 31, 46])
        opt.onGround  called when the ground is down and nothing yet stands on it: paint lines on the road here
        opt.onProps   called before trees and lamps: make what stands in the street here (it is sorted with what moves)
+       opt.side      { x, w }: a side street crossing at x, w wide, with houses down it
      town.ground, town.walls, town.props  the first splat of each layer; town.ROAD, town.WALL half-widths
+     town.groups   [{ a, b, c }]: each house (splats a to b, its middle c), for the renderer to put in order for the eye
+     town.gap      [x0, x1] of the side street, or null
    TOWN_PAL is the palette by day and TOWN_DUSK the same colours late in the day. */
 const TOWN_PAL = [
   0x7ccdea, // 0 sky
@@ -63,8 +66,8 @@ function makeTown(B, T, opt) {
   const SKYAN = { em: true, nd: true };
   {
     const e0 = norm([0.15, 0.55, 1]);
-    for (let k = 0; k < 150; k++) {
-      const d = norm([rr(-0.15, 1), rr(0.02, 0.95), rr(-1, 1)]),
+    for (let k = 0; k < 230; k++) {
+      const d = norm([rr(-1, 1), rr(0.02, 0.95), rr(-1, 1)]),
         p = [d[0] * 150, d[1] * 150 - 4, d[2] * 150],
         n = [-d[0], -d[1], -d[2]],
         e = norm(add(e0, n, -dot(e0, n))),
@@ -77,7 +80,9 @@ function makeTown(B, T, opt) {
       [112, 20, 30, 15],
       [84, 46, 12, 12],
       [70, 34, -52, 14],
-      [60, 26, 50, 12]
+      [60, 26, 50, 12],
+      [-90, 32, 24, 16],
+      [-78, 42, -40, 13]
     ].forEach(c => blob([c[0], c[1], c[2]], [c[3], c[3] * 1.5, c[3]], [9, 9, 10, 10], 46, SKYAN));
     // the sun, high on the left: soft light, then a hard white middle and a few rays
     const sun = [78, 104, -62];
@@ -96,11 +101,14 @@ function makeTown(B, T, opt) {
     WALL = 5.3,
     X0 = opt.x0 === undefined ? -14 : opt.x0,
     X1 = 78;
-  const ground = B.count();
+  const ground = B.count(),
+    gap = opt.side ? [opt.side.x - opt.side.w / 2, opt.side.x + opt.side.w / 2] : null,
+    open = (x, m) => !gap || x < gap[0] - (m || 0) || x > gap[1] + (m || 0),
+    SIDE = 24;
   const trees = [];
   for (const side of [-1, 1])
     for (let x = side < 0 ? 4 : 8.5; x < X1 - 6; x += rr(8.5, 12))
-      trees.push({ x, side, z: side * (ROAD + 0.75), th: rr(1.9, 2.4), r: rr(1.15, 1.55) });
+      if (open(x, 1.6)) trees.push({ x, side, z: side * (ROAD + 0.75), th: rr(1.9, 2.4), r: rr(1.15, 1.55) });
   {
     // road: pale, warm
     paint([X0, 0, -ROAD], [1, 0, 0], [0, 0, 1], UP, X1 - X0, ROAD * 2, [2, 3, 3, 4, 4, 4], {
@@ -138,9 +146,18 @@ function makeTown(B, T, opt) {
         under: false
       });
     }
+    if (gap) {
+      // the side street: road across the pavements and on between the houses, a line down it, a crossing at each mouth
+      paint([gap[0], 0.02, -SIDE], [0, 0, 1], [1, 0, 0], UP, SIDE * 2, gap[1] - gap[0], [2, 3, 3, 4, 4], { cu: 1.3, cv: 0.5, along: 'u' });
+      for (let z = -SIDE + 1; z < SIDE; z += 2.2)
+        if (Math.abs(z) > ROAD + 0.3) stroke([opt.side.x + rr(-0.05, 0.05), 0.06, z], UP, [0, 0, 1], 1.3, 0.14, 6);
+      for (const sd of [-1, 1])
+        for (let x = gap[0] + 0.45; x < gap[1] - 0.2; x += 0.62)
+          stroke([x, 0.06, sd * (WALL + 1.1)], UP, [0, 0, 1], rr(1.3, 1.5), 0.36, 6);
+    }
     // shadows, in dots: the right-hand houses across the pavement and the edge of the road, and one under every tree
     for (let x = X0; x < X1; x += 2.4)
-      stroke([x, 0.2, WALL - 0.3 - rr(0, 0.5)], UP, [1, 0, 0], rr(4.5, 6), rr(3.6, 5.2), 1, SHADE);
+      if (open(x, 1)) stroke([x, 0.2, WALL - 0.3 - rr(0, 0.5)], UP, [1, 0, 0], rr(4.5, 6), rr(3.6, 5.2), 1, SHADE);
     for (const t of trees)
       stroke([t.x + 0.9, t.side < 0 ? 0.2 : 0.07, t.z - 1.5], UP, norm([0.5, 0, -1]), t.r * 4.2, t.r * 2.3, 1, SHADE);
     if (opt.onGround) opt.onGround({ ROAD, WALL, X0, X1 });
@@ -208,8 +225,14 @@ function makeTown(B, T, opt) {
     }
   }
   /* everything that stands is made from the far end of the street to the near: paint goes down in the order it is made */
-  const walls = B.count();
-  {
+  const walls = B.count(),
+    groups = [];
+  const group = (c, make) => {
+    const a = B.count();
+    make();
+    groups.push({ a, b: B.count(), c });
+  };
+  group([X1 + 4, 12, 0], () => {
     const tx = X1 + 4;
     paint([tx, 0, -3.2], [0, 0, 1], [0, 1, 0], [-1, 0, 0], 6.4, 24, [9, 10, 10, 13], {
       cu: 1.3,
@@ -222,19 +245,48 @@ function makeTown(B, T, opt) {
     stroke([tx - 0.9, 19.6, 0], [-1, 0, 0], UP, 1.9, 0.3, 1);
     stroke([tx - 0.9, 19, 0.6], [-1, 0, 0], [0, 0, 1], 1.5, 0.3, 1);
     for (let y = 3; y < 16; y += 3.2) stroke([tx - 0.3, y, 0], [-1, 0, 0], UP, 1.8, 1.0, 17);
-  }
-  paint([X1, 0, -16], [0, 0, 1], [0, 1, 0], [-1, 0, 0], 32, 9, [14, 15, 9, 10], { cu: 1.6, along: 'v' });
+  });
+  group([X1, 4.5, 0], () => paint([X1, 0, -16], [0, 0, 1], [0, 1, 0], [-1, 0, 0], 32, 9, [14, 15, 9, 10], { cu: 1.6, along: 'v' }));
+  // the near end of the street, behind the eye: seen only when it turns round
+  group([X0 - 0.5, 4.5, 0], () =>
+    paint([X0 - 0.5, 0, -16], [0, 0, 1], [0, 1, 0], [1, 0, 0], 32, 9, [14, 15, 15, 16], { cu: 1.6, along: 'v' })
+  );
+  if (gap)
+    for (const sd of [-1, 1]) {
+      // down the side street: the sides of the corner houses, and the end of it
+      const z0 = sd < 0 ? -SIDE : WALL;
+      group([gap[0], 4.5, sd * 14], () => {
+        paint([gap[0], 0.1, z0], [0, 0, 1], [0, 1, 0], [1, 0, 0], SIDE - WALL, 9, sd < 0 ? [12, 13, 13, 6] : [14, 15, 15, 16], {
+          cu: 1.1,
+          along: 'v'
+        });
+        for (let z = WALL + 1; z < SIDE; z += 1.5)
+          for (let y = 3.4; y < 8.5; y += 1.55) stroke([gap[0] + 0.07, y, sd * z], [1, 0, 0], UP, 1.0, 0.56, R() < 0.25 ? 18 : 17);
+      });
+      group([gap[1], 4.5, sd * 15], () => {
+        const z1 = sd < 0 ? -SIDE : WALL + 7;
+        paint([gap[1], 0.1, z1], [0, 0, 1], [0, 1, 0], [-1, 0, 0], SIDE - WALL - 7, 9, sd < 0 ? [14, 15, 15, 16] : [12, 13, 13, 6], {
+          cu: 1.1,
+          along: 'v'
+        });
+      });
+      group([opt.side.x, 4.5, sd * SIDE], () =>
+        paint([gap[0] - 2, 0, sd * SIDE], [1, 0, 0], [0, 1, 0], [0, 0, -sd], gap[1] - gap[0] + 4, 9, [9, 10, 10, 13], { cu: 1.2, along: 'v' })
+      );
+    }
   {
     const row = [];
     for (const side of [-1, 1]) {
       let x = X0;
       while (x < X1 - 2) {
-        const w = rr(5.5, 9.5);
+        let w = rr(5.5, 9.5);
+        if (gap && x < gap[0] && x + w > gap[0]) w = gap[0] - x;
         row.push({ x, w, h: rr(7, 12.5), side });
         x += w;
+        if (gap && Math.abs(x - gap[0]) < 1e-6) x = gap[1];
       }
     }
-    row.sort((a, b) => b.x - a.x).forEach(q => house(q.x, q.w, q.h, q.side));
+    row.sort((a, b) => b.x - a.x).forEach(q => group([q.x + q.w / 2, q.h / 2, q.side * WALL], () => house(q.x, q.w, q.h, q.side)));
   }
 
   // ---------------------------------------------------------------- trees, lamps, flags
@@ -255,6 +307,7 @@ function makeTown(B, T, opt) {
   }
   for (const side of [-1, 1])
     for (let x = -1; x < X1 - 10; x += 13) {
+      if (!open(x, 1)) continue;
       const z = side * (ROAD + 0.3);
       B.stick(x, 2.0, z, UP, 1.95, 0.05, P[1], 3);
       B.stick(x, 3.9, z - side * 0.3, [0, 0, 1], 0.32, 0.045, P[1], 3);
@@ -262,7 +315,7 @@ function makeTown(B, T, opt) {
     }
   for (const side of [-1, 1])
     for (let x = -6; x < 40; x += 3.1) {
-      if (opt.crossing !== false && Math.abs(x - 7.5) < 2) continue;
+      if ((opt.crossing !== false && Math.abs(x - 7.5) < 2) || !open(x, 0.3)) continue;
       const z = side * (ROAD + 0.12);
       B.stick(x, 0.5, z, UP, 0.34, 0.075, P[24], 3);
       B.iso(x, 0.86, z, 0.062, P[6], 3);
@@ -286,6 +339,6 @@ function makeTown(B, T, opt) {
     }
   });
 
-  return { ground, walls, props, trees, ROAD, WALL, X0, X1 };
+  return { ground, walls, groups, props, trees, gap, ROAD, WALL, X0, X1 };
 }
 if (typeof module !== 'undefined') module.exports = { makeTown, TOWN_PAL, TOWN_DUSK };
